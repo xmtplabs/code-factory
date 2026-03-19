@@ -1,6 +1,10 @@
 {
   "name": "code-factory",
   "description": "Agent skills for structured software delivery: spec writing, issue creation, task decomposition, and implementation",
+  "owner": {
+    "name": "xmtplabs",
+    "url": "https://github.com/xmtplabs"
+  },
   "plugins": [
     {
       "name": "code-factory",
