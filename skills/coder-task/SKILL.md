@@ -1,7 +1,6 @@
 ---
 name: coder-task
 description: Use when given a GitHub issue URL to autonomously implement — forks the repo, writes a spec if needed, decomposes into tasks, implements, and opens a PR
-disable-model-invocation: true
 ---
 
 # Coder Task
