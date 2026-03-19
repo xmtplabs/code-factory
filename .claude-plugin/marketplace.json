@@ -1,0 +1,11 @@
+{
+  "name": "code-factory",
+  "description": "Agent skills for structured software delivery: spec writing, issue creation, task decomposition, and implementation",
+  "plugins": [
+    {
+      "name": "code-factory",
+      "version": "0.1.0",
+      "source": "./"
+    }
+  ]
+}

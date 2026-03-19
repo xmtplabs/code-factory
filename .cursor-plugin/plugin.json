@@ -1,0 +1,8 @@
+{
+  "name": "code-factory",
+  "displayName": "Code Factory",
+  "description": "Agent skills for structured software delivery: spec writing, issue creation, task decomposition, and implementation",
+  "version": "0.1.0",
+  "skills": "./skills/",
+  "agents": "./agents/"
+}
