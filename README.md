@@ -43,14 +43,16 @@ Each skill produces a file artifact and can be invoked independently:
 ### Claude Code
 
 ```bash
-claude plugin add xmtplabs/code-factory
+claude plugin marketplace add xmtplabs/code-factory
+claude plugin install code-factory@code-factory
 ```
 
 Or install from a local clone:
 
 ```bash
 git clone https://github.com/xmtplabs/code-factory.git
-claude plugin add /path/to/code-factory
+claude plugin marketplace add /path/to/code-factory
+claude plugin install code-factory@code-factory
 ```
 
 ### Codex
