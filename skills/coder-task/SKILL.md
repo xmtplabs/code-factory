@@ -114,6 +114,7 @@ git push fork fix/issue-${ISSUE_NUMBER}
 gh pr create \
     --repo ${REPO_OWNER}/${REPO_NAME} \
     --head $(gh api user --jq .login):fix/issue-${ISSUE_NUMBER} \
+    --draft \
     --title "<concise title>" \
     --body "Resolves ${ISSUE_URL}
 
