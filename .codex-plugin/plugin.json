@@ -1,0 +1,35 @@
+{
+  "name": "code-factory",
+  "version": "0.1.0",
+  "description": "Agent skills for structured software delivery: spec writing, task decomposition, and implementation",
+  "author": {
+    "name": "xmtplabs",
+    "url": "https://github.com/xmtplabs"
+  },
+  "repository": "https://github.com/xmtplabs/code-factory",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "spec-writing",
+    "task-decomposition",
+    "implementation",
+    "workflows",
+    "tdd",
+    "code-review"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Code Factory",
+    "shortDescription": "Structured software delivery: spec writing, task decomposition, and implementation",
+    "longDescription": "A complete pipeline for turning rough ideas into implemented, tested, and reviewed code. Includes skills for writing EARS-format design specs, decomposing specs into TDD-enforced task lists, orchestrating implementation with phase-boundary reviews, and end-to-end GitHub issue-to-PR automation.",
+    "developerName": "xmtplabs",
+    "category": "Development",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/xmtplabs/code-factory",
+    "defaultPrompt": [
+      "Use Code Factory to write a design spec for my feature",
+      "Decompose this spec into implementable tasks",
+      "Execute the task plan and implement the code"
+    ]
+  }
+}
