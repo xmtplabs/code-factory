@@ -15,6 +15,7 @@ digraph execute {
     "Dispatch implementer for next task" [shape=box];
     "Handle implementer result" [shape=box];
     "Phase boundary?" [shape=diamond];
+    "Simplify review" [shape=box];
     "Code quality review" [shape=box];
     "Spec compliance review (phase)" [shape=box];
     "Phase review passed?" [shape=diamond];
@@ -35,7 +36,8 @@ digraph execute {
     "Dispatch implementer for next task" -> "Handle implementer result";
     "Handle implementer result" -> "Phase boundary?";
     "Phase boundary?" -> "More tasks?" [label="no"];
-    "Phase boundary?" -> "Code quality review" [label="yes"];
+    "Phase boundary?" -> "Simplify review" [label="yes"];
+    "Simplify review" -> "Code quality review";
     "Code quality review" -> "Spec compliance review (phase)";
     "Spec compliance review (phase)" -> "Phase review passed?";
     "Phase review passed?" -> "More tasks?" [label="yes"];
@@ -88,9 +90,13 @@ If an implementer fails the same task 3 times, stop execution and report to the 
 
 ## Step 3: Phase Reviews
 
-At each phase boundary, dispatch two reviewers sequentially:
+At each phase boundary, run three steps sequentially:
 
-### 1. Code Quality Review (first)
+### 1. Simplify Review (first)
+
+Execute the `/simplify` skill against the files changed during the phase. This reviews the code for opportunities to reuse existing patterns, improve quality, and increase efficiency — then applies any fixes automatically.
+
+### 2. Code Quality Review (second)
 
 Dispatch the `code-reviewer` agent with:
 - Files changed during the phase
@@ -98,7 +104,7 @@ Dispatch the `code-reviewer` agent with:
 
 Checks: code organization, naming, test quality, patterns, maintainability. Returns APPROVED or ISSUES with file:line references.
 
-### 2. Spec Compliance Review (second)
+### 3. Spec Compliance Review (third)
 
 Dispatch the `spec-reviewer` agent with:
 - EARS requirements relevant to this phase (from coverage matrix)
@@ -106,7 +112,7 @@ Dispatch the `spec-reviewer` agent with:
 
 Checks: does the implementation satisfy the requirements it claims to cover? Returns APPROVED or ISSUES with specific gaps.
 
-**Why this order:** Fix quality issues first so the spec reviewer sees clean code.
+**Why this order:** Simplify first to deduplicate and clean up, then review quality on the simplified code, then verify spec compliance on the final result.
 
 ### Handling Review Failures
 
@@ -154,7 +160,7 @@ Max 3 remediation cycles. If gaps remain, report to the user with specific unmet
 | Mistake | Fix |
 |---------|-----|
 | Orchestrator writes code itself | Only dispatch agents — never write code |
-| Skipping phase reviews | Every phase boundary gets quality + spec review |
+| Skipping phase reviews | Every phase boundary gets simplify + quality + spec review |
 | Re-running both reviewers when one failed | Only re-run the reviewer that found issues |
 | Pasting the plan file path instead of task text | Inline everything — agents don't read plan files |
 | Ignoring DONE_WITH_CONCERNS | Read concerns before deciding to proceed |
