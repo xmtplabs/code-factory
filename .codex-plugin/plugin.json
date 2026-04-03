@@ -18,6 +18,7 @@
     "code-review"
   ],
   "skills": "./skills/",
+  "agents": "./.codex/agents/",
   "interface": {
     "displayName": "Code Factory",
     "shortDescription": "Structured software delivery: spec writing, task decomposition, and implementation",
