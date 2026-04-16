@@ -65,6 +65,7 @@ Six sections. Scale depth to complexity — see Scaling Guide.
 - **External docs**: URLs for third-party library documentation
 - **References**: Blog posts, RFCs, or source materials that informed the design
 - **Impact area**: Modules or directories that will be modified
+- **Existing behavior at risk**: When modifying existing functionality, list behaviors in the impact area that must continue working unchanged. If unclear what existing behaviors matter, ask the developer.
 
 ### 4. System Design
 
@@ -97,6 +98,18 @@ Write "None" if no dependencies — don't omit the section.
 
 Use EARS format for every criterion. Each must be testable and unambiguous.
 
+#### Regression Protection
+
+*Include this subsection when the spec modifies existing functionality. Omit for greenfield features.*
+
+When modifying existing behavior, identify requirements that must NOT change:
+
+- **Preserved behaviors:** EARS requirements for existing functionality that must continue working. Write these as THE SYSTEM SHALL CONTINUE TO requirements.
+- **Verification anchors:** Existing tests that already cover these behaviors (cite file paths). These tests must remain green throughout implementation.
+- **Coverage gaps:** If existing behavior has no test coverage, add requirements to write regression tests BEFORE making changes. These become the first tasks in the implementation plan.
+
+If you are uncertain which existing behaviors must be preserved, ask the developer before proceeding.
+
 #### Edge Cases
 
 Address relevant categories: concurrency/race conditions, dependency failures, error handling/recovery, boundary conditions, security considerations.
@@ -115,8 +128,9 @@ Concrete commands to prove correctness. Include linting and formatting checks.
 | **Optional** | WHERE [feature] THE SYSTEM SHALL [behavior] | WHERE verbose logging is enabled THE SYSTEM SHALL log request bodies |
 | **Unwanted** | THE SYSTEM SHALL NOT [behavior] | THE SYSTEM SHALL NOT expose internal error details to clients |
 | **Complex** | WHEN [a] AND [b] THE SYSTEM SHALL [behavior] | WHEN the queue is full AND the message is high-priority THE SYSTEM SHALL evict the oldest low-priority message |
+| **Preserved** | THE SYSTEM SHALL CONTINUE TO [behavior] | THE SYSTEM SHALL CONTINUE TO return HTTP 200 for valid API keys after the rate limiter is added |
 
-**Rules:** Use SHALL, never "should"/"may". Each requirement independently testable. No vague terms — use measurable criteria.
+**Rules:** Use SHALL, never "should"/"may". Each requirement independently testable. No vague terms — use measurable criteria. Use SHALL CONTINUE TO for regression requirements on modified functionality.
 
 ## Scaling Guide
 
@@ -138,6 +152,7 @@ Concrete commands to prove correctness. Include linting and formatting checks.
 | Missing non-goals | Unstated scope = assumed in scope |
 | Implementation as design | Contracts and behavior, not code |
 | No context links | Link the catalyst — future readers need the WHY |
+| Modifying code with no regression plan | List preserved behaviors, cite existing tests, or require new regression tests first |
 
 ## Examples
 
