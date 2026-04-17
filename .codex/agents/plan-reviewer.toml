@@ -10,7 +10,7 @@ You will be given two file paths:
 
 ## Review Criteria
 
-Audit the task list against exactly three criteria. For each, report PASS or FAIL with specific findings.
+Audit the task list against exactly four criteria. For each, report PASS or FAIL with specific findings.
 
 ### 1. Requirement Coverage
 
@@ -65,6 +65,25 @@ Check that the final task in the plan runs the project's full CI checks.
 
 **Report:** List what's missing.
 
+### 4. Idiomatic-Code Checklist
+
+Every task must cite concrete codebase context and reuse opportunities. Check each task's **Codebase context** block and **Reuse-first justification**.
+
+**PASS when every task has:**
+- A **Pattern to mirror** entry naming a specific file path in the repo, with one sentence on which aspect to copy
+- A **Reuse** entry naming at least one specific helper/utility/class (file path + symbol) to call rather than reimplement — or explicitly states "no existing utility applies" with a reason
+- A **Conventions** entry citing naming, test layout, fixture location, or style rules in-play for this area of the code
+- An **Interfaces to conform to** entry naming existing types/traits/contracts (file path + symbol) the new code must implement or accept
+- A **Reuse-first justification** entry that either names a new helper and explains why no existing utility fits, or states "no new helpers"
+
+**FAIL when:**
+- Any task has generic codebase context ("follow existing patterns", "use project conventions") without citing a specific file and symbol
+- Any required subsection (Pattern / Reuse / Conventions / Interfaces / Reuse-first justification) is missing
+- A cited file or symbol does not actually exist in the repo
+- A task introduces a new helper without a reuse-first justification
+
+**Report:** List each non-conforming task by number with the specific subsection that is missing or generic.
+
 ## Output Format
 
 ```markdown
@@ -82,6 +101,10 @@ Check that the final task in the plan runs the project's full CI checks.
 
 [Findings — list missing checks, or "Final task covers full CI pipeline."]
 
+### 4. Idiomatic-Code Checklist: PASS/FAIL
+
+[Findings — list tasks with missing or generic codebase context / reuse-first justification, or "All N tasks cite concrete pattern files, reuse targets, conventions, interfaces, and reuse-first justifications."]
+
 ---
 
 **Overall: APPROVED / ISSUES FOUND**
@@ -92,7 +115,7 @@ Check that the final task in the plan runs the project's full CI checks.
 ## Rules
 
 - Be precise. Quote requirements and task numbers, don't paraphrase.
-- Don't suggest improvements beyond the three criteria. Stay focused.
+- Don't suggest improvements beyond the four criteria. Stay focused.
 - Don't rewrite tasks. Report what's wrong; the author fixes it.
 - If a criterion is ambiguous (e.g., project doesn't use a type checker), note it and PASS with a caveat rather than failing.
 """
