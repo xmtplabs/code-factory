@@ -177,14 +177,14 @@ Two sequential reviews before the task list is finalized.
 
 ### Plan Review
 
-Dispatch the `plan-reviewer` agent with the draft task list path and source spec path. It audits: (1) requirement coverage, (2) TDD enforcement, (3) CI verification, (4) idiomatic-code checklist (every task cites concrete codebase context and reuse opportunities). Fix issues and re-dispatch. Max 3 iterations, then write best-effort result and proceed.
+Dispatch the `plan-reviewer` agent with the draft task list path and source spec path. It audits: (1) requirement coverage, (2) TDD enforcement, (3) CI verification, (4) idiomatic-code checklist (every task cites concrete codebase context and reuse opportunities). Fix issues and **continue the same agent** (via `SendMessage`) for re-review — it already knows what it flagged. Max 3 iterations, then write best-effort result and proceed.
 
 ### Task List Review
 
 After the plan-reviewer passes, dispatch the `task-list-reviewer` agent with the spec path and task list path. It checks cross-artifact consistency: requirement inventory, orphan tasks, implicit assumptions, conflicts, and traceability gaps.
 
 - **APPROVED or ADVISORY** → proceed to write the task list. ADVISORY findings (MAJOR/MINOR) are noted in the task list header as warnings but do not block.
-- **CRITICAL_FINDINGS** → fix the specific issues cited, then re-dispatch. Max 3 iterations, then write best-effort result and proceed.
+- **CRITICAL_FINDINGS** → fix the specific issues cited, then **continue the same agent** for re-review. Max 3 iterations, then write best-effort result and proceed.
 
 ## Common Mistakes
 

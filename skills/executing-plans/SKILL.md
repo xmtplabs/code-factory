@@ -127,7 +127,7 @@ Dispatch all 4 specialized reviewers in parallel, each with the files changed du
 Wait for all 4 to complete. Aggregate and deduplicate results: when multiple reviewers flag the same file:line, merge into a single finding and note which reviewers reported it. This prevents the implementer from receiving duplicate fix instructions.
 
 - If ALL return APPROVED → proceed to Stage 2
-- If ANY return ISSUES → dispatch implementer with the deduplicated findings from all reviewers that found issues, then re-run only the reviewers that failed. Max 3 fix cycles per phase, then proceed with noted concerns.
+- If ANY return ISSUES → dispatch implementer with the deduplicated findings from all reviewers that found issues, then **continue the same reviewer agents** (via `SendMessage`) rather than spawning fresh ones. The reviewer already knows what it flagged — a continued agent produces a more focused re-review ("did you fix the issue I reported?") and avoids re-reading all files from scratch. Only re-run reviewers that failed. Max 3 fix cycles per phase, then proceed with noted concerns.
 - Critical findings from any reviewer block progression until resolved.
 
 ### Stage 2: Test Coverage Review
@@ -139,7 +139,7 @@ After code review passes, dispatch the `test-coverage-reviewer` agent with:
 
 Checks: for each requirement in this phase, does a test file exist with relevant test cases? For `SHALL CONTINUE TO` requirements, are verification anchors still present?
 
-Returns PASS or FAIL with specific gaps. On FAIL, dispatch implementer to write the missing tests, then re-run test-coverage-reviewer. Max 2 fix cycles per phase, then proceed with noted gaps.
+Returns PASS or FAIL with specific gaps. On FAIL, dispatch implementer to write the missing tests, then **continue the same test-coverage-reviewer agent** to re-check — it already knows which requirements lacked coverage. Max 2 fix cycles per phase, then proceed with noted gaps.
 
 **Why this order:** Fix code quality issues first (they may affect which tests exist), then verify requirement-to-test coverage before moving on.
 
@@ -189,7 +189,7 @@ If 3 remediation cycles are exhausted and gaps remain, dispatch the `auto-debugg
 - All files created or modified during execution
 - CI output (if relevant)
 
-**Critical: Do NOT include prior remediation attempts in the auto-debugger prompt.** The agent must have a fresh context — no history of what was already tried.
+**Critical: The auto-debugger must be a NEW agent with fresh context** — do NOT continue an existing agent or include prior remediation history. This is the opposite of the phase-boundary reviewers (which reuse context for focused re-checks). Fresh context avoids the "context pollution that causes infinite retry loops."
 
 #### Handling the Verdict
 
