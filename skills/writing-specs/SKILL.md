@@ -66,6 +66,12 @@ Six sections. Scale depth to complexity — see Scaling Guide.
 - **References**: Blog posts, RFCs, or source materials that informed the design
 - **Impact area**: Modules or directories that will be modified
 - **Existing behavior at risk**: When modifying existing functionality, list behaviors in the impact area that must continue working unchanged. If unclear what existing behaviors matter, ask the developer.
+- **Brownfield gap analysis** *(include when the target repo has existing code in the impact area)*: Enumerate existing modules, interfaces, and tests that the change must interoperate with. For each module:
+  - File path and current responsibility
+  - Public interfaces (exports, API surface) the new code must conform to or extend
+  - Existing tests that cover the module (these become verification anchors in Regression Protection)
+  
+  This analysis feeds directly into the Regression Protection subsection and the Codebase Context blocks in the task list.
 
 ### 4. System Design
 
@@ -132,6 +138,25 @@ Concrete commands to prove correctness. Include linting and formatting checks.
 
 **Rules:** Use SHALL, never "should"/"may". Each requirement independently testable. No vague terms — use measurable criteria. Use SHALL CONTINUE TO for regression requirements on modified functionality.
 
+## Clarification Markers
+
+During drafting, identify up to 3 unknowns where you made an assumption. Mark them inline in the spec:
+
+```
+[NEEDS CLARIFICATION: <specific question> — assumed: <your best guess>]
+```
+
+Each marker records both the question AND the assumption the spec proceeds with.
+
+**Interactive mode (user present):** Present markers one at a time, each with a recommended answer. The user can accept the recommendation, provide their own answer, or defer. Integrate each accepted answer immediately into the spec — don't batch them. Remove all markers from the final written spec after resolution.
+
+**Autonomous mode (coder-task):** Post clarification questions as a GitHub issue comment so the issue author can respond asynchronously. Proceed immediately with decomposition and execution using the assumed answers — do NOT wait for responses. If the user later responds on the issue, coder-task's "Receiving Comments" mechanism handles updating the spec and re-running affected steps.
+
+**Rules:**
+- Maximum 3 markers per spec. If you have more than 3 unknowns, the scope is too ambiguous — ask the user to clarify before drafting.
+- Each marker must be a specific, answerable question — not "needs more thought."
+- Each marker must include the assumed answer.
+
 ## Scaling Guide
 
 | Section | Small (~150w) | Medium (~400w) | Large (~800w) |
@@ -153,6 +178,7 @@ Concrete commands to prove correctness. Include linting and formatting checks.
 | Implementation as design | Contracts and behavior, not code |
 | No context links | Link the catalyst — future readers need the WHY |
 | Modifying code with no regression plan | List preserved behaviors, cite existing tests, or require new regression tests first |
+| Modifying brownfield code without gap analysis | Enumerate existing modules, interfaces, and tests in the impact area before designing |
 
 ## Examples
 
@@ -160,3 +186,5 @@ See `examples/` for graduated examples:
 - `small-cli-flag.md` — Adding a `--verbose` flag (minimal but complete)
 - `medium-api-endpoint.md` — REST API with auth and rate limiting
 - `large-event-system.md` — Distributed event pipeline with retry and DLQ
+- `bugfix-small-regression.md` — Bugfix spec with 3-section format and CONTINUE TO requirements
+- `brownfield-delta-change.md` — Brownfield change with gap analysis and delta requirements

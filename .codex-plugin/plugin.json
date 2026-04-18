@@ -1,6 +1,6 @@
 {
   "name": "code-factory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent skills for structured software delivery: spec writing, task decomposition, and implementation",
   "author": {
     "name": "xmtplabs",
@@ -15,14 +15,16 @@
     "implementation",
     "workflows",
     "tdd",
-    "code-review"
+    "code-review",
+    "bugfix",
+    "traceability"
   ],
   "skills": "./skills/",
   "agents": "./.codex/agents/",
   "interface": {
     "displayName": "Code Factory",
     "shortDescription": "Structured software delivery: spec writing, task decomposition, and implementation",
-    "longDescription": "A complete pipeline for turning rough ideas into implemented, tested, and reviewed code. Includes skills for writing EARS-format design specs, decomposing specs into TDD-enforced task lists, orchestrating implementation with phase-boundary reviews, and end-to-end GitHub issue-to-PR automation.",
+    "longDescription": "A complete pipeline for turning rough ideas into implemented, tested, and reviewed code. Includes skills for writing EARS-format design specs, bugfix-specific 3-section specs, decomposing specs into TDD-enforced task lists with parallel markers, orchestrating implementation with 4 parallel specialized code reviewers and test coverage checks, auto-debug escalation, and end-to-end GitHub issue-to-PR automation with content-based bug detection.",
     "developerName": "xmtplabs",
     "category": "Development",
     "capabilities": ["Read", "Write"],

@@ -15,9 +15,13 @@ digraph decompose {
     "Explore codebase" [shape=box];
     "Draft phased task list" [shape=box];
     "Dispatch plan-reviewer agent" [shape=box];
-    "Review passed?" [shape=diamond];
-    "Fix issues" [shape=box];
-    "Iterations > 3?" [shape=diamond];
+    "Plan review passed?" [shape=diamond];
+    "Fix plan issues" [shape=box];
+    "Plan iterations > 3?" [shape=diamond];
+    "Dispatch task-list-reviewer agent" [shape=box];
+    "Task list review passed?" [shape=diamond];
+    "Fix task list issues" [shape=box];
+    "TL iterations > 3?" [shape=diamond];
     "Best-effort write" [shape=box];
     "Write to docs/plans/" [shape=box];
     "Hand off to executing-plans" [shape=doublecircle];
@@ -25,12 +29,18 @@ digraph decompose {
     "Read spec" -> "Explore codebase";
     "Explore codebase" -> "Draft phased task list";
     "Draft phased task list" -> "Dispatch plan-reviewer agent";
-    "Dispatch plan-reviewer agent" -> "Review passed?";
-    "Review passed?" -> "Write to docs/plans/" [label="yes"];
-    "Review passed?" -> "Iterations > 3?" [label="no"];
-    "Iterations > 3?" -> "Fix issues" [label="no"];
-    "Iterations > 3?" -> "Best-effort write" [label="yes"];
-    "Fix issues" -> "Dispatch plan-reviewer agent";
+    "Dispatch plan-reviewer agent" -> "Plan review passed?";
+    "Plan review passed?" -> "Dispatch task-list-reviewer agent" [label="yes"];
+    "Plan review passed?" -> "Plan iterations > 3?" [label="no"];
+    "Plan iterations > 3?" -> "Fix plan issues" [label="no"];
+    "Plan iterations > 3?" -> "Best-effort write" [label="yes"];
+    "Fix plan issues" -> "Dispatch plan-reviewer agent";
+    "Dispatch task-list-reviewer agent" -> "Task list review passed?";
+    "Task list review passed?" -> "Write to docs/plans/" [label="APPROVED or ADVISORY"];
+    "Task list review passed?" -> "TL iterations > 3?" [label="CRITICAL_FINDINGS"];
+    "TL iterations > 3?" -> "Fix task list issues" [label="no"];
+    "TL iterations > 3?" -> "Best-effort write" [label="yes"];
+    "Fix task list issues" -> "Dispatch task-list-reviewer agent";
     "Best-effort write" -> "Write to docs/plans/";
     "Write to docs/plans/" -> "Hand off to executing-plans";
 }
@@ -75,7 +85,23 @@ N. Verification — CI and integration checks
 
 ### Phases
 
-Derive phases from the spec — a bugfix may need one, a new project may need five. The final phase is always **Verification** (full CI checks). All tasks execute sequentially, top to bottom.
+Derive phases from the spec — a bugfix may need one, a new project may need five. The final phase is always **Verification** (full CI checks). All tasks execute sequentially, top to bottom, unless marked for parallel execution (see below).
+
+### Parallel Markers
+
+Tasks within a phase that have no dependencies on other tasks in the same phase may be marked with `[P]`:
+
+```markdown
+### Task 3 [P]: Add input validation
+### Task 4 [P]: Add error formatting
+### Task 5: Wire validation and formatting into handler  ← depends on 3 and 4
+```
+
+**Rules:**
+- A `[P]` task must not read or write files that another `[P]` task in the same phase also modifies
+- A `[P]` task must not depend on the output of another task in the same phase
+- If dependency analysis is uncertain, do NOT mark the task as `[P]` — sequential is the safe default
+- The marker is advisory — the orchestrator may still execute sequentially if concurrent dispatch is not available
 
 ### Task Template
 
@@ -147,7 +173,18 @@ End the document with a traceability matrix. **Every EARS requirement from the s
 
 ## Step 3: Review Loop
 
+Two sequential reviews before the task list is finalized.
+
+### Plan Review
+
 Dispatch the `plan-reviewer` agent with the draft task list path and source spec path. It audits: (1) requirement coverage, (2) TDD enforcement, (3) CI verification, (4) idiomatic-code checklist (every task cites concrete codebase context and reuse opportunities). Fix issues and re-dispatch. Max 3 iterations, then write best-effort result and proceed.
+
+### Task List Review
+
+After the plan-reviewer passes, dispatch the `task-list-reviewer` agent with the spec path and task list path. It checks cross-artifact consistency: requirement inventory, orphan tasks, implicit assumptions, conflicts, and traceability gaps.
+
+- **APPROVED or ADVISORY** → proceed to write the task list. ADVISORY findings (MAJOR/MINOR) are noted in the task list header as warnings but do not block.
+- **CRITICAL_FINDINGS** → fix the specific issues cited, then re-dispatch. Max 3 iterations, then write best-effort result and proceed.
 
 ## Common Mistakes
 
@@ -164,3 +201,5 @@ Dispatch the `plan-reviewer` agent with the draft task list path and source spec
 | Missing codebase context | Every task needs file paths, patterns, and interfaces the implementer will use |
 | Generic codebase context ("follow existing patterns") without citing a file | Every task must name a concrete pattern file, specific helpers to reuse, conventions in-play, and interfaces to conform to |
 | New helper added without justification | Every task must include a reuse-first justification — name why no existing utility fits, or state "no new helpers" |
+| No parallel markers on independent tasks | Analyze task dependencies within each phase; mark truly independent tasks with `[P]` |
+| Skipping task list review | Always run `task-list-reviewer` after `plan-reviewer` passes |

@@ -12,13 +12,15 @@ Orchestrate execution of a task list produced by `decomposing-specs`. Dispatch o
 ```dot
 digraph execute {
     "Read task list + spec" [shape=box];
-    "Dispatch implementer for next task" [shape=box];
+    "Dispatch implementer(s) for next task(s)" [shape=box];
     "Handle implementer result" [shape=box];
     "Phase boundary?" [shape=diamond];
-    "Simplify review" [shape=box];
-    "Code quality review" [shape=box];
-    "Phase review passed?" [shape=diamond];
+    "Parallel code review (4 agents)" [shape=box];
+    "All reviewers passed?" [shape=diamond];
     "Dispatch implementer to fix" [shape=box];
+    "Test coverage review" [shape=box];
+    "Coverage passed?" [shape=diamond];
+    "Dispatch implementer to write tests" [shape=box];
     "More tasks?" [shape=diamond];
     "Run CI checks" [shape=box];
     "CI green?" [shape=diamond];
@@ -28,22 +30,28 @@ digraph execute {
     "Generate supplementary tasks" [shape=box];
     "Execute supplementary tasks" [shape=box];
     "Remediation cycles > 3?" [shape=diamond];
+    "Dispatch auto-debugger" [shape=box];
+    "Auto-debugger verdict?" [shape=diamond];
+    "Execute fix plan" [shape=box];
     "Report to user" [shape=box];
     "Done" [shape=doublecircle];
 
-    "Read task list + spec" -> "Dispatch implementer for next task";
-    "Dispatch implementer for next task" -> "Handle implementer result";
+    "Read task list + spec" -> "Dispatch implementer(s) for next task(s)";
+    "Dispatch implementer(s) for next task(s)" -> "Handle implementer result";
     "Handle implementer result" -> "Phase boundary?";
     "Phase boundary?" -> "More tasks?" [label="no"];
-    "Phase boundary?" -> "Simplify review" [label="yes"];
-    "Simplify review" -> "Code quality review";
-    "Code quality review" -> "Phase review passed?";
-    "Phase review passed?" -> "More tasks?" [label="yes"];
-    "Phase review passed?" -> "Dispatch implementer to fix" [label="no"];
-    "Dispatch implementer to fix" -> "Phase review passed?" [label="re-review failed reviewer"];
-    "More tasks?" -> "Dispatch implementer for next task" [label="yes"];
+    "Phase boundary?" -> "Parallel code review (4 agents)" [label="yes"];
+    "Parallel code review (4 agents)" -> "All reviewers passed?";
+    "All reviewers passed?" -> "Test coverage review" [label="yes"];
+    "All reviewers passed?" -> "Dispatch implementer to fix" [label="no"];
+    "Dispatch implementer to fix" -> "All reviewers passed?" [label="re-run failed reviewers"];
+    "Test coverage review" -> "Coverage passed?";
+    "Coverage passed?" -> "More tasks?" [label="yes"];
+    "Coverage passed?" -> "Dispatch implementer to write tests" [label="no"];
+    "Dispatch implementer to write tests" -> "Coverage passed?" [label="re-check"];
+    "More tasks?" -> "Dispatch implementer(s) for next task(s)" [label="yes"];
     "More tasks?" -> "Run CI checks" [label="no"];
-    "Run CI checks" -> "CI green?" ;
+    "Run CI checks" -> "CI green?";
     "CI green?" -> "Final spec review" [label="yes"];
     "CI green?" -> "Dispatch implementer to fix CI" [label="no"];
     "Dispatch implementer to fix CI" -> "Run CI checks";
@@ -51,9 +59,13 @@ digraph execute {
     "Final review passed?" -> "Done" [label="yes"];
     "Final review passed?" -> "Remediation cycles > 3?" [label="no"];
     "Remediation cycles > 3?" -> "Generate supplementary tasks" [label="no"];
-    "Remediation cycles > 3?" -> "Report to user" [label="yes"];
+    "Remediation cycles > 3?" -> "Dispatch auto-debugger" [label="yes"];
     "Generate supplementary tasks" -> "Execute supplementary tasks";
     "Execute supplementary tasks" -> "Run CI checks";
+    "Dispatch auto-debugger" -> "Auto-debugger verdict?";
+    "Auto-debugger verdict?" -> "Execute fix plan" [label="RETRY_TASK"];
+    "Auto-debugger verdict?" -> "Report to user" [label="BLOCK_TASK or NEEDS_HUMAN"];
+    "Execute fix plan" -> "Run CI checks";
     "Report to user" -> "Done";
 }
 ```
@@ -62,18 +74,31 @@ digraph execute {
 
 Read the task list and source spec once. Extract:
 
-- All tasks grouped by phase
+- All tasks grouped by phase, noting any `[P]` parallel markers
 - All EARS requirements from the spec
 - The coverage matrix
 - CI commands (test, lint, format, typecheck)
 
 ## Step 2: Execute Tasks
 
-Walk tasks sequentially, top to bottom. For each task, dispatch the `implementer` agent with an inline prompt containing:
+Walk tasks top to bottom within each phase. For each task, dispatch the `implementer` agent with an inline prompt containing:
 
 1. **Task text** — full content from the plan (files, TDD steps, code snippets)
 2. **Context** — what this task is building toward, what prior tasks built, relevant architectural decisions from the spec
 3. **Constraints** — working directory, commit conventions, files not to touch
+
+### Parallel Task Dispatch
+
+Tasks marked with `[P]` within a phase have no intra-phase dependencies and may be dispatched concurrently:
+
+1. At the start of each phase, identify all `[P]`-marked tasks
+2. Dispatch all `[P]` tasks simultaneously (each to its own implementer agent)
+3. Wait for all to complete before proceeding
+4. Non-`[P]` tasks execute sequentially after all parallel tasks complete
+
+If any parallel task returns BLOCKED or NEEDS_CONTEXT, handle it individually without blocking other parallel tasks. If a parallel task fails, the others may still proceed — handle failures after all parallel tasks resolve.
+
+**Fallback:** If concurrent dispatch is not supported by the runtime, execute `[P]` tasks sequentially in order. The `[P]` marker is advisory.
 
 ### Handling Implementer Results
 
@@ -88,29 +113,37 @@ If an implementer fails the same task 3 times, stop execution and report to the 
 
 ## Step 3: Phase Reviews
 
-At each phase boundary, run two steps sequentially:
+At each phase boundary, run two stages:
 
-### 1. Simplify Review (first)
+### Stage 1: Parallel Code Review (4 agents simultaneously)
 
-Execute the `/simplify` skill against the files changed during the phase. This reviews the code for opportunities to reuse existing patterns, improve quality, and increase efficiency — then applies any fixes automatically.
+Dispatch all 4 specialized reviewers in parallel, each with the files changed during the phase and a summary of what was built:
 
-### 2. Code Quality Review (second)
+1. `correctness-reviewer` — plan alignment, logic, completeness, edge cases, boundary audit
+2. `design-reviewer` — patterns, naming, reuse, deduplication, complexity
+3. `security-reviewer` — vulnerabilities, input validation, auth, secrets
+4. `test-quality-reviewer` — assertion quality, test design, edge case coverage, anti-patterns
 
-Dispatch the `code-reviewer` agent with:
+Wait for all 4 to complete. Aggregate and deduplicate results: when multiple reviewers flag the same file:line, merge into a single finding and note which reviewers reported it. This prevents the implementer from receiving duplicate fix instructions.
+
+- If ALL return APPROVED → proceed to Stage 2
+- If ANY return ISSUES → dispatch implementer with the deduplicated findings from all reviewers that found issues, then re-run only the reviewers that failed. Max 3 fix cycles per phase, then proceed with noted concerns.
+- Critical findings from any reviewer block progression until resolved.
+
+### Stage 2: Test Coverage Review
+
+After code review passes, dispatch the `test-coverage-reviewer` agent with:
+- EARS requirements mapped to tasks in the completed phase (from the coverage matrix)
 - Files changed during the phase
-- Summary of what was built
+- Test files created during the phase
 
-Checks: code organization, naming, test quality, patterns, maintainability. Returns APPROVED or ISSUES with file:line references.
+Checks: for each requirement in this phase, does a test file exist with relevant test cases? For `SHALL CONTINUE TO` requirements, are verification anchors still present?
 
-**Why this order:** Simplify first to deduplicate and clean up, then review quality on the simplified code.
+Returns PASS or FAIL with specific gaps. On FAIL, dispatch implementer to write the missing tests, then re-run test-coverage-reviewer. Max 2 fix cycles per phase, then proceed with noted gaps.
 
-**Spec compliance is not checked at phase boundaries** — it is checked once during final validation (Step 4). Phase reviews focus on craft; final validation confirms the EARS requirements are met.
+**Why this order:** Fix code quality issues first (they may affect which tests exist), then verify requirement-to-test coverage before moving on.
 
-### Handling Review Failures
-
-1. Dispatch implementer with the specific issues and relevant files
-2. Re-run only the reviewer that failed
-3. Max 3 fix cycles per reviewer per phase, then proceed with noted concerns
+**Spec compliance is not checked at phase boundaries** — it is checked once during final validation (Step 4). Phase reviews focus on craft and coverage; final validation confirms the EARS requirements are met.
 
 ## Step 4: Final Validation
 
@@ -145,17 +178,39 @@ If the final review finds gaps:
 3. Execute them sequentially with the same implementer dispatch pattern
 4. Re-run CI verification, then final spec review
 
-Max 3 remediation cycles. If gaps remain, report to the user with specific unmet requirements and what was attempted.
+Max 3 remediation cycles. If gaps remain after 3 cycles, escalate to auto-debugger (see below).
+
+### Auto-Debug Escalation
+
+If 3 remediation cycles are exhausted and gaps remain, dispatch the `auto-debugger` agent as a last resort. Provide it with:
+
+- The source spec (EARS requirements)
+- The spec-reviewer's failure report (which requirements failed and why)
+- All files created or modified during execution
+- CI output (if relevant)
+
+**Critical: Do NOT include prior remediation attempts in the auto-debugger prompt.** The agent must have a fresh context — no history of what was already tried.
+
+#### Handling the Verdict
+
+| Verdict | Interactive (user present) | Autonomous (coder-task) |
+|---------|---------------------------|-------------------------|
+| `RETRY_TASK` | Dispatch new implementer with fix plan + current diff, re-run final validation (one attempt) | Same |
+| `BLOCK_TASK` | Mark task as blocked with root cause, continue with remaining work, report blocked items at end | Same |
+| `NEEDS_HUMAN` | Stop execution, report root-cause analysis to user, wait for guidance | **Do NOT stop.** Post root-cause analysis + specific questions to the GitHub issue. Treat all affected tasks as `BLOCK_TASK`. Continue with remaining unblocked work. Note the gap in the PR description. |
 
 ## Common Mistakes
 
 | Mistake | Fix |
 |---------|-----|
 | Orchestrator writes code itself | Only dispatch agents — never write code |
-| Skipping phase reviews | Every phase boundary gets simplify + quality review |
-| Re-running both reviewers when one failed | Only re-run the reviewer that found issues |
+| Running reviewers sequentially instead of in parallel | All 4 code reviewers dispatch simultaneously at each phase boundary |
+| Re-running all reviewers when only some failed | Only re-run reviewers that returned ISSUES |
+| Missing test coverage review at phase boundary | Always run `test-coverage-reviewer` after code review passes |
 | Running spec-reviewer at a phase boundary | Spec compliance is checked only during final validation |
 | Pasting the plan file path instead of task text | Inline everything — agents don't read plan files |
 | Ignoring DONE_WITH_CONCERNS | Read concerns before deciding to proceed |
 | Retrying a blocked implementer without changes | Change something: more context, smaller task, or different approach |
 | Final review checks plan compliance, not spec | Final review must check EARS requirements from the spec |
+| Including prior attempts in auto-debugger prompt | Auto-debugger must get fresh context — spec, failures, and code only |
+| Blocking all parallel tasks when one fails | Handle parallel task failures individually after all resolve |
