@@ -37,6 +37,7 @@ Each skill produces a file artifact and can be invoked independently:
 | `code-factory` | v2 of `coder-task`: same flow with scripted fork/branch/PR steps, requester-as-reviewer, and selective feedback handling |
 | `receiving-feedback` | Classify new issue comments as trivial (do inline) vs. meaningful (update spec, re-decompose) — used by `code-factory` |
 | `bugfix` | Produce a 3-section bugfix spec (Current/Expected/Unchanged Behavior) — dispatched by coder-task, not invoked directly |
+| `setup-code-factory` | Onboard a repo to Code Factory: write `.code-factory/config.toml`, create a devcontainer if missing, and validate build/lint/test inside it |
 
 ## Agents
 
