@@ -1,5 +1,5 @@
 ---
-name: code-factory
+name: code-factory-issue
 description: Use when given a GitHub issue URL to autonomously implement — forks the repo, writes a spec if needed, decomposes into tasks, implements, and opens a PR
 ---
 
@@ -20,10 +20,10 @@ The following must be provided or derived from the issue URL:
 
 ## Script invocation
 
-All shell snippets below that start with `scripts/...` refer to scripts inside **this skill's own directory** (the directory containing this `SKILL.md`). Invoke them with an absolute path so the working directory doesn't matter. For example, if this skill lives at `<plugin-root>/skills/code-factory/`, invoke:
+All shell snippets below that start with `scripts/...` refer to scripts inside **this skill's own directory** (the directory containing this `SKILL.md`). Invoke them with an absolute path so the working directory doesn't matter. For example, if this skill lives at `<plugin-root>/skills/code-factory-issue/`, invoke:
 
 ```bash
-bash <plugin-root>/skills/code-factory/scripts/read-issue.sh "$ISSUE_URL"
+bash <plugin-root>/skills/code-factory-issue/scripts/read-issue.sh "$ISSUE_URL"
 ```
 
 The `scripts/` prefix in the examples below is shorthand for that absolute path.
