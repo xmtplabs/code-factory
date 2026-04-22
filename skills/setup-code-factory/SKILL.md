@@ -1,7 +1,6 @@
 ---
 name: setup-code-factory
 description: Use when configuring a repository to run with Code Factory — creates `.code-factory/config.toml`, sets up a devcontainer if missing, and validates that build/lint/test work inside it. Triggers on "setup code factory", "configure code factory", "onboard this repo to code factory".
-disable-model-invocation: true
 ---
 
 # Setup Code Factory
