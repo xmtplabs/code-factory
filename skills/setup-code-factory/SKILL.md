@@ -77,6 +77,14 @@ Config schema: https://code-factory-action.xmtp.team/schema.json
 
 Create `.code-factory/config.toml` if it does not exist. If it does, read it, merge additions without clobbering user values, and ask before changing anything already set.
 
+**ALWAYS include the schema directive as the very first line of the file:**
+
+```toml
+#:schema https://code-factory-action.xmtp.team/schema.json
+```
+
+This is non-negotiable — every `.code-factory/config.toml` produced or touched by this skill must start with that directive. When merging into an existing file that lacks it, add it as the first line (this is the one edit allowed without asking, since it is purely an editor hint).
+
 **Required rules:**
 - **Nix detected** → add a `[[sandbox.volumes]]` entry with `path = "/nix/store"` and `size = "25Gi"`.
 - **Docker detected** → set `sandbox.docker = true`.
@@ -99,8 +107,10 @@ Create `.code-factory/config.toml` if it does not exist. If it does, read it, me
 
 Plain project (no docker, no nix, language outside the small/large rules — e.g. Go):
 ```toml
+#:schema https://code-factory-action.xmtp.team/schema.json
+
 [sandbox]
-default: size = "medium"
+# default: size = "medium"
 # default: docker = false
 
 # [harness]
@@ -116,6 +126,8 @@ default: size = "medium"
 
 Node/TypeScript project, no Docker:
 ```toml
+#:schema https://code-factory-action.xmtp.team/schema.json
+
 [sandbox]
 size = "small"
 # default: docker = false
@@ -133,6 +145,8 @@ size = "small"
 
 Node project with Docker:
 ```toml
+#:schema https://code-factory-action.xmtp.team/schema.json
+
 [sandbox]
 # default: size = "medium"
 docker = true
@@ -150,6 +164,8 @@ docker = true
 
 Rust project with Nix:
 ```toml
+#:schema https://code-factory-action.xmtp.team/schema.json
+
 [sandbox]
 size = "large"
 # default: docker = false
@@ -171,6 +187,8 @@ size = "25Gi"
 
 Project with both Docker and Nix:
 ```toml
+#:schema https://code-factory-action.xmtp.team/schema.json
+
 [sandbox]
 size = "large"
 docker = true
@@ -339,6 +357,7 @@ Summarize:
 
 | Mistake | Fix |
 |---------|-----|
+| Omitting the `#:schema` directive at the top of `.code-factory/config.toml` | Always emit `#:schema https://code-factory-action.xmtp.team/schema.json` as the first line |
 | Touching an existing `.devcontainer/devcontainer.json` | Never edit it — record suggestions in the final report and let the user decide |
 | Hardcoding `:latest` image tags | Use a major-version tag so builds are reproducible |
 | Adding docker-outside-of-docker with `moby: true` or default | Must be `"moby": false` per spec |
