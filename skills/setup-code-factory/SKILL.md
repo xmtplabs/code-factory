@@ -80,36 +80,114 @@ Create `.code-factory/config.toml` if it does not exist. If it does, read it, me
 **Required rules:**
 - **Nix detected** → add a `[[sandbox.volumes]]` entry with `path = "/nix/store"` and `size = "25Gi"`.
 - **Docker detected** → set `sandbox.docker = true`.
-- Leave optional fields (`sandbox.size`, `harness.provider`, `scheduled_jobs`, `on_event`) absent unless the user has told you what they want — defaults apply.
+- **Sandbox size** (default is `medium`; pick one based on the project):
+  - Rust or Nix detected → `sandbox.size = "large"`. (Rust and Nix builds routinely exceed medium.)
+  - Primary language is TypeScript/JavaScript or Python **and** Docker is **not** detected → `sandbox.size = "small"`.
+  - Otherwise → leave `sandbox.size` at the default (emit it commented out — see below).
+  - If rules collide (e.g. a TS project that also uses Nix), the `large` rule wins.
+- **Include every other optional field as a commented-out line showing its schema default**, so users can see what's available without having to read the schema. Fields to scaffold:
+  - `sandbox.size` (default `"medium"`) — uncomment only if a rule above sets it.
+  - `sandbox.docker` (default `false`) — uncomment only if Docker is detected.
+  - `harness.provider` (default `"claude_code"`).
+  - `scheduled_jobs` (default `[]`).
+  - `on_event.failed_run` (default `[]`).
+  - Any `[[sandbox.volumes]]` entry beyond the Nix one is project-specific and should NOT be scaffolded.
+- Prefix each commented default with `# default:` so intent is obvious (`# default: size = "medium"`).
+- If the user has already set a value, never comment it out — respect existing config.
 
-**Minimal shapes:**
+**Shapes:** every config scaffolds the full schema surface — defaults appear commented out, detected rules are uncommented and set.
 
-Plain project (no docker, no nix):
+Plain project (no docker, no nix, language outside the small/large rules — e.g. Go):
 ```toml
-# No required fields; defaults apply. Create an empty file so tooling sees the repo is onboarded.
+[sandbox]
+default: size = "medium"
+# default: docker = false
+
+# [harness]
+# default: provider = "claude_code"
+
+# default: scheduled_jobs = []
+
+# [[on_event.failed_run]]
+# workflows = []
+# branches = []
+# prompt_additions = ""
+```
+
+Node/TypeScript project, no Docker:
+```toml
+[sandbox]
+size = "small"
+# default: docker = false
+
+# [harness]
+# default: provider = "claude_code"
+
+# default: scheduled_jobs = []
+
+# [[on_event.failed_run]]
+# workflows = []
+# branches = []
+# prompt_additions = ""
 ```
 
 Node project with Docker:
 ```toml
 [sandbox]
+# default: size = "medium"
 docker = true
+
+# [harness]
+# default: provider = "claude_code"
+
+# default: scheduled_jobs = []
+
+# [[on_event.failed_run]]
+# workflows = []
+# branches = []
+# prompt_additions = ""
 ```
 
 Rust project with Nix:
 ```toml
+[sandbox]
+size = "large"
+# default: docker = false
+
 [[sandbox.volumes]]
 path = "/nix/store"
 size = "25Gi"
+
+# [harness]
+# default: provider = "claude_code"
+
+# default: scheduled_jobs = []
+
+# [[on_event.failed_run]]
+# workflows = []
+# branches = []
+# prompt_additions = ""
 ```
 
-Project with both:
+Project with both Docker and Nix:
 ```toml
 [sandbox]
+size = "large"
 docker = true
 
 [[sandbox.volumes]]
 path = "/nix/store"
 size = "25Gi"
+
+# [harness]
+# default: provider = "claude_code"
+
+# default: scheduled_jobs = []
+
+# [[on_event.failed_run]]
+# workflows = []
+# branches = []
+# prompt_additions = ""
 ```
 
 After writing, validate the TOML parses (`python3 -c "import tomllib; tomllib.load(open('.code-factory/config.toml','rb'))"`).
