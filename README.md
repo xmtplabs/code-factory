@@ -34,6 +34,8 @@ Each skill produces a file artifact and can be invoked independently:
 | `decomposing-specs` | Break a spec into a phased, TDD-enforced task list with parallel markers and cross-artifact validation |
 | `executing-plans` | Execute a task list with parallel implementer dispatch, 4 specialized code reviewers, test coverage checks, and auto-debug escalation |
 | `coder-task` | End-to-end: GitHub issue → classify bug/feature → spec → tasks → implementation → PR on a fork |
+| `code-factory` | v2 of `coder-task`: same flow with scripted fork/branch/PR steps, requester-as-reviewer, and selective feedback handling |
+| `receiving-feedback` | Classify new issue comments as trivial (do inline) vs. meaningful (update spec, re-decompose) — used by `code-factory` |
 | `bugfix` | Produce a 3-section bugfix spec (Current/Expected/Unchanged Behavior) — dispatched by coder-task, not invoked directly |
 
 ## Agents
