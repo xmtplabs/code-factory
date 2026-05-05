@@ -2,7 +2,7 @@
   "name": "code-factory",
   "displayName": "Code Factory",
   "description": "Agent skills for structured software delivery: spec writing, issue creation, task decomposition, and implementation",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "skills": "./skills/",
   "agents": "./agents/"
 }
