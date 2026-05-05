@@ -23,8 +23,8 @@ Handle new comments that arrive on the issue or PR during `code-factory` Steps 6
 
 1. Update `docs/plans/YYYY-MM-DD-issue-${ISSUE_NUMBER}-design.md`.
 2. Post the diff (or a concise summary) as a comment on the issue.
-3. Re-run `decomposing-specs` to regenerate the task list.
-4. Resume `executing-plans` from the earliest affected phase — preserve completed tasks still valid under the new requirements.
+3. Re-run `decomposing-specs` to regenerate the plan directory. The `decomposer` will rewrite `plan.md`, `standards.md`, and phase files. Already-completed phases stay on disk; the new plan should preserve their structure where the requirements still hold.
+4. Resume `executing-plans` from the earliest affected phase. If a downstream phase was a sketch, the `phase-elaborator` will pick up the new requirements when its turn comes — no manual rework needed for sketched phases.
 
 **Won't fix** — suggestion is impossible, incorrect, or conflicts with the spec's intent:
 

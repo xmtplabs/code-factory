@@ -18,21 +18,21 @@ GitHub issue → coder-task → classify (bug/feature) → spec → decompose �
 ```
 
 1. **writing-specs** — Collaborate with the user to produce a design spec with EARS requirements. This is the human checkpoint — the user reviews and approves the spec before anything gets built.
-2. **decomposing-specs** — Autonomously converts the spec into a phased, TDD-enforced task list with `[P]` parallel markers. Runs plan-reviewer and task-list-reviewer agents to validate coverage and cross-artifact consistency, then hands off immediately.
-3. **executing-plans** — Orchestrates implementation by dispatching implementer subagents for each task (parallel for `[P]`-marked tasks). Reviews code quality with 4 parallel specialized reviewers and test coverage at phase boundaries. Runs CI checks, final full-spec review, and auto-debug escalation if remediation fails.
+2. **decomposing-specs** — Autonomously dispatches a `decomposer` subagent that explores the codebase and writes a multi-file plan: `plan.md` (TOC + coverage matrix), `standards.md` (one-time codebase context shared across phases), and per-phase files. Phase 1 + Verification ship fully elaborated; intermediate phases as sketches. Scoped plan-reviewer and task-list-reviewer validate the elaborated portion before hand-off.
+3. **executing-plans** — Orchestrates implementation. Loads `plan.md` + `standards.md` only; reads phase files on demand. At each phase boundary, dispatches `phase-elaborator` to flesh out sketched phases against the current codebase (just-in-time elaboration). Then dispatches implementer subagents (with batching for cohesive consecutive tasks, parallel for `[P]` tasks). Phase-boundary review depth scales to phase size; severity-gated re-review prevents ping-pong. Runs CI checks, final full-spec review, and auto-debug escalation if remediation fails.
 4. **Human review** — The user reviews the finished implementation. Feedback loops back to a new spec or direct fixes.
 
 Each skill produces a file artifact and can be invoked independently:
 - `writing-specs` → `docs/plans/YYYY-MM-DD-<topic>-design.md`
-- `decomposing-specs` → `docs/plans/YYYY-MM-DD-<topic>-tasks.md`
+- `decomposing-specs` → `docs/plans/YYYY-MM-DD-<topic>/` (multi-file: `plan.md`, `standards.md`, `phases/NN-*.md` — Phase 1 + Verification fully elaborated; intermediate phases sketched and elaborated just-in-time by `executing-plans`)
 
 ## Skills
 
 | Skill | Description |
 |-------|-------------|
 | `writing-specs` | Collaborate on a design spec with EARS requirements, clarification markers, and brownfield gap analysis |
-| `decomposing-specs` | Break a spec into a phased, TDD-enforced task list with parallel markers and cross-artifact validation |
-| `executing-plans` | Execute a task list with parallel implementer dispatch, 4 specialized code reviewers, test coverage checks, and auto-debug escalation |
+| `decomposing-specs` | Dispatch a `decomposer` subagent to write a multi-file phased plan (Phase 1 + Verification elaborated; rest sketched for just-in-time elaboration) |
+| `executing-plans` | Execute a multi-file plan with on-demand phase loading, just-in-time elaboration, batched/parallel implementer dispatch, size-scaled phase reviews, and auto-debug escalation |
 | `coder-task` | End-to-end: GitHub issue → classify bug/feature → spec → tasks → implementation → PR on a fork |
 | `code-factory` | v2 of `coder-task`: same flow with scripted fork/branch/PR steps, requester-as-reviewer, and selective feedback handling |
 | `receiving-feedback` | Classify new issue comments as trivial (do inline) vs. meaningful (update spec, re-decompose) — used by `code-factory` |
@@ -43,7 +43,9 @@ Each skill produces a file artifact and can be invoked independently:
 
 | Agent | Description |
 |-------|-------------|
-| `implementer` | Implements a single task with TDD, tests, and verification |
+| `decomposer` | Reads spec + explores codebase, writes the multi-file plan (`plan.md`, `standards.md`, phase files) — keeps codebase exploration out of the main agent's context |
+| `phase-elaborator` | Converts a sketched phase into a fully-elaborated phase file just before execution, against the current post-prior-phase codebase |
+| `implementer` | Implements a single task (or batch of cohesive consecutive tasks) with TDD, tests, and verification |
 | `correctness-reviewer` | Verifies plan alignment, logic correctness, completeness, and edge case handling |
 | `design-reviewer` | Reviews code organization, patterns, naming, and reuse opportunities |
 | `security-reviewer` | Reviews code for security vulnerabilities, injection risks, and secrets handling |

@@ -139,7 +139,7 @@ Do not wait for user approval — proceed to decomposition. If the user later co
 
 ## Step 6: Decompose
 
-Use the `decomposing-specs` skill to break the spec into a phased task list. Output: `docs/plans/YYYY-MM-DD-issue-${ISSUE_NUMBER}-tasks.md`.
+Use the `decomposing-specs` skill to break the spec into a multi-file phased task plan. Output: directory `docs/plans/YYYY-MM-DD-issue-${ISSUE_NUMBER}/` containing `plan.md`, `standards.md`, and `phases/NN-<name>.md` files (Phase 1 + Verification fully elaborated; intermediate phases as sketches that the executor elaborates just-in-time).
 
 ## Step 7: Execute
 
