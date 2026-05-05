@@ -24,6 +24,22 @@ If anything is unclear about the requirements, approach, or dependencies — **a
 - Follow existing codebase patterns — don't restructure things outside your task
 - If a file you're creating grows beyond the task's intent, stop and report as DONE_WITH_CONCERNS
 
+## No Plan Vocabulary in Code
+
+The task you receive contains plan-document organizational vocabulary: cycle labels (`Cycle A`, `Cycle B`, ...), phase numbers (`Phase 2`), EARS requirement IDs (`REQ-N`, `E-PROV-2`, etc.), and traceability annotations like `*(satisfies REQ-N)*`. **None of these may appear in the code, tests, comments, identifiers, or commit messages you write.** They are tools for the plan reader only.
+
+- Test names and `describe(…)` strings must read like real test names. Strip cycle/phase/EARS labels.
+  - Wrong: `describe('ProvisionEmailWorkflow — Cycle B: check-existing short-circuit (E-PROV-2)', …)`
+  - Right: `describe('ProvisionEmailWorkflow: check-existing short-circuit', …)`
+- Code comments must not reference the plan, cycle, phase, task number, or EARS ID. Only document the WHY of the code itself, and only when non-obvious.
+  - Wrong: `// Cycle B (REQ-N): short-circuit when record exists`
+  - Right (only if the WHY is non-obvious): `// Avoid a second API call when the record already exists`
+  - Best: no comment at all, since well-named code documents itself.
+- Identifiers (variables, functions, classes, file names) must not encode plan structure. No `cycleBHandler`, no `reqNValidator`, no `phase2_setup.ts`.
+- Commit messages must read as if the plan didn't exist. No `feat: Phase 2 / Cycle B (E-PROV-2): ...`. Use a plain-English summary of the behavior change.
+
+If a task you're given has plan vocabulary leaking into its test-code blocks, strip the vocabulary as you implement. Do not copy it through to the repo. Note this in your DONE_WITH_CONCERNS report so the plan can be fixed at its source.
+
 ## Self-Review
 
 Before reporting, review your own work:

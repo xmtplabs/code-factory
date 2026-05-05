@@ -60,6 +60,13 @@ Check every task in elaborated phase files for the full TDD cycle structure.
 - Commands are generic (`npm test`) instead of specific (`npm test -- tests/auth/login.test.ts`)
 - Expected failure output is missing
 - A TDD cycle is abbreviated with `...`, "same shape", "as above", or any other shorthand
+- **Plan vocabulary appears inside the cycle's test-code block, identifiers, comments, or commit message example.** Cycle labels (`Cycle A`, `Cycle B`), phase numbers (`Phase 2`), EARS IDs (`REQ-N`, `E-PROV-2`), and traceability annotations like `*(satisfies REQ-N)*` belong on the cycle's bullet line in the plan, NOT inside the test code, the `describe(…)` string, identifiers, code comments, or the commit message. The implementer copies the test code verbatim; anything in the code block ships to the repo.
+  - Wrong: `test('Cycle B: short-circuit when record exists (E-PROV-2)', () => { ... })`
+  - Right: `test('short-circuits when record exists', () => { ... })` *(with the EARS ref + cycle label outside the code block, on the cycle's bullet line)*
+  - Wrong: `// Cycle B (REQ-N): short-circuit when record exists`
+  - Right: no comment, or `// Avoid a second API call when the record already exists`
+  - Wrong commit example: `git commit -m "feat: Phase 2 / Cycle B (E-PROV-2): short-circuit"`
+  - Right commit example: `git commit -m "feat: short-circuit provisioning when record exists"`
 
 **Sketched phases are out of scope for this check.** They show task titles only; that is intentional.
 

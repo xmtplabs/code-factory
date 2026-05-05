@@ -29,6 +29,13 @@ What to check:
 
 5. **Duplication** — code that should be consolidated or extracted. Only flag duplication where the duplicated logic is identical or nearly identical AND appears in 3+ places. Two similar lines is not duplication.
 
+6. **Plan vocabulary leaks** — the implementer received a task that contained plan-document organizational labels: cycle labels (`Cycle A`, `Cycle B`, ...), phase numbers (`Phase 2`), EARS requirement IDs (`REQ-N`, `E-PROV-2`, etc.), and traceability annotations like `*(satisfies REQ-N)*`. **None of those may appear in the shipped code.** Flag any occurrence (severity: Critical) in:
+   - Test names and `describe(…)` / `it(…)` strings — e.g., `describe('ProvisionEmailWorkflow — Cycle B: ... (E-PROV-2)', …)` is wrong; should be `describe('ProvisionEmailWorkflow: ...', …)`.
+   - Code comments — e.g., `// Cycle B (REQ-N): ...` is wrong; comments must document the WHY of the code, not the plan structure.
+   - Identifiers — variable, function, class, or file names that encode plan structure (`cycleBHandler`, `reqNValidator`, `phase2_setup.ts`).
+   - Commit messages on the phase's commits — anything mentioning `Phase N`, `Cycle X`, or an EARS ID.
+   The fix is always to strip the plan vocabulary while preserving the underlying behavior description in plain English.
+
 **Balance guardrail:** Do NOT flag code for being "too simple." Avoid recommending:
 - Nested ternaries or dense one-liners over clear if/else
 - Premature abstractions ("this could be a generic utility")

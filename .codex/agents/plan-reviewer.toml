@@ -34,7 +34,15 @@ Every elaborated task must have:
 - One or more fully-expanded TDD cycles, each with: failing test (complete code), verify fails (specific command + expected message), implement to satisfy (EARS req refs), verify passes (specific command)
 - Commit step with specific files
 
-FAIL when any structural block is missing, test code is pseudocode, commands are generic (`npm test`), expected failure messages are missing, or any cycle is abbreviated with shorthand (`...`, "same shape", "as above").
+FAIL when any structural block is missing, test code is pseudocode, commands are generic (`npm test`), expected failure messages are missing, any cycle is abbreviated with shorthand (`...`, "same shape", "as above"), OR plan vocabulary appears inside the cycle's test-code block, identifiers, comments, or commit message example.
+
+**Plan-vocabulary leak rule:** Cycle labels (`Cycle A`, `Cycle B`), phase numbers (`Phase 2`), EARS IDs (`REQ-N`, `E-PROV-2`), and traceability annotations like `*(satisfies REQ-N)*` belong on the cycle's bullet line in the plan, NOT inside test code, `describe(…)` / `it(…)` strings, identifiers, code comments, or commit message examples. The implementer copies test code verbatim; anything inside the code block ships to the repo.
+- Wrong: `test('Cycle B: short-circuit when record exists (E-PROV-2)', () => { ... })`
+- Right: `test('short-circuits when record exists', () => { ... })` (EARS ref + cycle label live outside the code block, on the cycle's bullet line)
+- Wrong: `// Cycle B (REQ-N): short-circuit when record exists`
+- Right: no comment, or `// Avoid a second API call when the record already exists`
+- Wrong commit: `git commit -m "feat: Phase 2 / Cycle B (E-PROV-2): short-circuit"`
+- Right commit: `git commit -m "feat: short-circuit provisioning when record exists"`
 
 Sketched phases are out of scope.
 
