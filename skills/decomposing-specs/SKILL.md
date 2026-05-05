@@ -87,6 +87,8 @@ N. Verification — CI and integration checks
 
 Derive phases from the spec — a bugfix may need one, a new project may need five. The final phase is always **Verification** (full CI checks). All tasks execute sequentially, top to bottom, unless marked for parallel execution (see below).
 
+**Phase floor:** Each non-Verification phase must contain **at least 3 tasks**. A single-task or two-task phase wastes the entire phase-boundary review apparatus — merge it with the adjacent phase whose tasks share the most context. The only exception: a phase whose single task is genuinely high-risk (security boundary, data migration, public API contract) where you want full reviewers regardless of size — flag it explicitly with `**Risk:** high — solo phase justified` so the executor knows to keep it isolated.
+
 ### Parallel Markers
 
 Tasks within a phase that have no dependencies on other tasks in the same phase may be marked with `[P]`:
@@ -103,9 +105,31 @@ Tasks within a phase that have no dependencies on other tasks in the same phase 
 - If dependency analysis is uncertain, do NOT mark the task as `[P]` — sequential is the safe default
 - The marker is advisory — the orchestrator may still execute sequentially if concurrent dispatch is not available
 
+### Task Sizing — Behavioral Slices, Not TDD Cycles
+
+A task is a **cohesive behavioral slice**, not a single TDD cycle. One task may contain multiple test→implement→pass cycles internally if they advance the same capability. Aim for **1-3 hours of work per task**.
+
+**Cohesion test — keep work in one task when:**
+- The chunks touch the same module or overlapping file set
+- They share the same pattern-to-mirror and codebase context
+- They form one reviewable behavioral unit (e.g., "input validation + its error type + wiring into the handler" is one task, not three)
+
+**Split into a new task only when:**
+- The next chunk touches a different module/file area, OR
+- It requires a different pattern-to-mirror, OR
+- It depends on review feedback from the prior chunk landing first
+
+Time alone is not a split signal. A 2-hour cohesive task beats three 40-minute fragmented tasks every time — the fragmented version pays full orchestration overhead (context block, codebase exploration, dispatch) per fragment.
+
+**Anti-patterns to avoid:**
+- One task per shell command (e.g., separate task for `pnpm add foo`)
+- One task per file copy/config edit when several configs land together as one setup unit
+- Splitting "validator + error type + caller wiring" across three tasks — that is one slice
+- Splitting a single TDD cycle into "write test" / "implement" tasks
+
 ### Task Template
 
-Each task is 1 to 2 hours containing the full TDD cycle. All verification commands must be specific — not generic. Implementation steps provide EARS requirements, codebase context, and key interfaces. Code snippets, pseudo-code, or complete test cases may be included to clarify requirements. The implementer decides *how*; the plan decides *what* and *why*.
+Each task contains 1-3 hours of work as a cohesive behavioral slice. All verification commands must be specific — not generic. Implementation steps provide EARS requirements, codebase context, and key interfaces. Code snippets, pseudo-code, or complete test cases may be included to clarify requirements. The implementer decides *how*; the plan decides *what* and *why*. A task may contain multiple TDD cycles and produce multiple commits.
 
 ```markdown
 ### Task N: [Short description]
@@ -123,39 +147,36 @@ Each task is 1 to 2 hours containing the full TDD cycle. All verification comman
 
 **Reuse-first justification:** If this task introduces a new helper/utility/abstraction, name it here and explain why no existing utility fits. Otherwise: "No new helpers — reuses [listed utilities]."
 
-- [ ] **Step 1: Write failing test**
-  ```language
-  test('specific behavior', () => {
-    expect(myFunction(input)).toBe(expected);
-  });
-  ```
+**TDD cycles** *(one or more — list each cycle the slice contains; squash trivial config/setup cycles into a single cycle)*
 
-- [ ] **Step 2: Verify test fails**
-  Run: `npm test -- tests/exact/path/to/test.ts`
-  Expected: FAIL — "myFunction is not defined"
+- [ ] **Cycle A — [behavior name]**
+  - Write failing test:
+    ```language
+    test('specific behavior', () => {
+      expect(myFunction(input)).toBe(expected);
+    });
+    ```
+  - Verify fails: `npm test -- tests/exact/path/to/test.ts` → FAIL "myFunction is not defined"
+  - Implement to satisfy:
+    - WHEN [condition] THE SYSTEM SHALL [behavior] *(EARS-REQ-N)*
+    - THE SYSTEM SHALL NOT [unwanted behavior] *(EARS-REQ-M)*
+  - Verify passes: `npm test -- tests/exact/path/to/test.ts` → PASS
 
-- [ ] **Step 3: Implement to satisfy requirements**
-  Requirements:
-  - WHEN [condition] THE SYSTEM SHALL [behavior] *(EARS-REQ-N)*
-  - THE SYSTEM SHALL NOT [unwanted behavior] *(EARS-REQ-M)*
+- [ ] **Cycle B — [next behavior, if part of same slice]** *(omit if single-cycle)*
+  - ... same shape ...
 
-  Key interfaces (from spec, include only if pre-decided):
-  ```language
-  export interface MyInterface {
-    field: Type;
-  }
-  ```
+**Key interfaces** *(from spec, include only if pre-decided):*
+```language
+export interface MyInterface {
+  field: Type;
+}
+```
 
-  Constraints:
-  - [Non-obvious constraints: performance bounds, error handling, compatibility]
-  - [Existing patterns or utilities to reuse]
+**Constraints:**
+- [Non-obvious constraints: performance bounds, error handling, compatibility]
+- [Existing patterns or utilities to reuse]
 
-- [ ] **Step 4: Verify test passes**
-  Run: `npm test -- tests/exact/path/to/test.ts`
-  Expected: PASS
-
-- [ ] **Step 5: Commit**
-  `git add src/path tests/path && git commit -m "feat: add myFunction"`
+- [ ] **Commit(s):** one commit per logical cycle, or one squashed commit for the whole slice if cycles are tightly coupled. Example: `git add src/path tests/path && git commit -m "feat: add input validation with error type"`
 ```
 
 ### Requirement Coverage Matrix
@@ -192,7 +213,10 @@ After the plan-reviewer passes, dispatch the `task-list-reviewer` agent with the
 |---------|-----|
 | Vague test steps ("write tests for X") | Complete, runnable test code |
 | Missing failure expectations | Every "verify fails" step needs the expected error |
-| Giant tasks (2+ hours) | Split until each is 30-60 minutes |
+| Over-fragmented tasks (each <30 min, single shell command, one config file, one helper) | Merge into a behavioral slice — same module, same pattern, same review boundary = one task |
+| Splitting validator + error type + caller wiring across separate tasks | One behavioral slice = one task, even if it spans 2-3 files |
+| Splitting "write test" and "implement" into separate tasks | A TDD cycle is internal to a task, not a task split |
+| Single-task or two-task phases | Merge with adjacent phase, or mark `**Risk:** high — solo phase justified` if isolation is genuinely needed |
 | No verification phase | Final phase must run full CI checks |
 | No coverage matrix | Every EARS requirement must trace to a task |
 | Generic commands (`npm test`) | Specific: `npm test -- tests/auth/login.test.ts` |

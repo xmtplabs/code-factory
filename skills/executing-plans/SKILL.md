@@ -5,7 +5,9 @@ description: Use when you have a task list from decomposing-specs and need to ex
 
 # Executing Plans
 
-Orchestrate execution of a task list produced by `decomposing-specs`. Dispatch one implementer subagent per task, review at phase boundaries, and validate the full spec at the end. The orchestrator never writes code — it only coordinates.
+Orchestrate execution of a task list produced by `decomposing-specs`. Dispatch implementer subagents (one per task, or batched across cohesive tasks), review at phase boundaries with size-scaled review, and validate the full spec at the end. The orchestrator never writes code — it only coordinates.
+
+**Efficiency posture:** subagent dispatch is expensive (context loading, codebase re-exploration, agent spinup). Prefer fewer, larger dispatches over many small ones whenever cohesion allows. Reviewer cycles can outnumber implementer cycles if you're not careful — scale reviews to phase size and resist re-review ping-pong.
 
 ## Process
 
@@ -81,20 +83,38 @@ Read the task list and source spec once. Extract:
 
 ## Step 2: Execute Tasks
 
-Walk tasks top to bottom within each phase. For each task, dispatch the `implementer` agent with an inline prompt containing:
+Walk tasks top to bottom within each phase. For each task (or batch of tasks — see below), dispatch the `implementer` agent with an inline prompt containing:
 
-1. **Task text** — full content from the plan (files, TDD steps, code snippets)
+1. **Task text** — full content from the plan (files, TDD steps, code snippets). For a batch, inline all tasks in order.
 2. **Context** — what this task is building toward, what prior tasks built, relevant architectural decisions from the spec
 3. **Constraints** — working directory, commit conventions, files not to touch
+
+### Batched Task Dispatch (sequential)
+
+**Default to batching** when consecutive sequential tasks within a phase share context. One implementer running 2-4 cohesive tasks back-to-back is dramatically cheaper than 2-4 separate dispatches — the agent loads context once, holds the codebase model warm, and emits one combined report.
+
+**Batch consecutive tasks N..N+k when ALL of these hold:**
+- They are within the same phase, in order, with no `[P]` markers between them (those route to the parallel branch below)
+- Their `Files:` lists overlap by ≥50%, OR they share the same pattern-to-mirror cited in their codebase context
+- The combined work is ≤4 hours of implementer time (roughly 2-4 tasks)
+- No task in the batch depends on phase-boundary review feedback before the next can start (it shouldn't — review is at phase boundary)
+
+When dispatching a batch, the implementer prompt lists each task block in order and asks for a per-task DONE/BLOCKED status in the result. If any task in the batch returns BLOCKED or NEEDS_CONTEXT, the implementer reports which task and what it completed; resume the rest as a smaller batch or individual dispatch.
+
+**Do NOT batch when:**
+- Tasks touch disjoint subsystems (different pattern-to-mirror, no file overlap)
+- An intermediate task is high-risk and you want a clean blast radius if it fails
+- The plan flags a task with `**Risk:** high`
 
 ### Parallel Task Dispatch
 
 Tasks marked with `[P]` within a phase have no intra-phase dependencies and may be dispatched concurrently:
 
 1. At the start of each phase, identify all `[P]`-marked tasks
-2. Dispatch all `[P]` tasks simultaneously (each to its own implementer agent)
-3. Wait for all to complete before proceeding
-4. Non-`[P]` tasks execute sequentially after all parallel tasks complete
+2. **Bundle small `[P]` tasks before parallelizing.** If two `[P]` tasks are each <1 hour and touch disjoint files, hand both to a single implementer to run sequentially — that's cheaper than two parallel dispatches with full context blocks. Reserve concurrent dispatch for `[P]` tasks that are individually substantial (≥1 hour each) or that benefit from isolation.
+3. Dispatch the resulting set (some bundled, some solo) concurrently
+4. Wait for all to complete before proceeding
+5. Non-`[P]` tasks execute sequentially (or batched, per above) after all parallel tasks complete
 
 If any parallel task returns BLOCKED or NEEDS_CONTEXT, handle it individually without blocking other parallel tasks. If a parallel task fails, the others may still proceed — handle failures after all parallel tasks resolve.
 
@@ -113,7 +133,20 @@ If an implementer fails the same task 3 times, stop execution and report to the 
 
 ## Step 3: Phase Reviews
 
-At each phase boundary, run two stages:
+At each phase boundary, scale review depth to phase size and risk. The full review apparatus is expensive — apply it where it earns its keep.
+
+### Review Tier Selection
+
+Pick the tier before dispatching anything:
+
+| Phase shape | Review tier |
+|-------------|-------------|
+| 1-2 tasks, no `**Risk:** high` flag | **Tier A — defer.** Skip phase-boundary review entirely. The final spec-reviewer pass at Step 4 will cover correctness; design/security/test concerns from this small phase fold into the next phase's review or the final pass. |
+| 1-2 tasks BUT flagged `**Risk:** high` (security boundary, data migration, public API) | **Tier B — focused.** Dispatch only the reviewers relevant to the risk (e.g., `security-reviewer` + `correctness-reviewer` for an auth boundary). Skip the full 4-agent suite. |
+| 3+ tasks, normal risk | **Tier C — full suite** (the original 4-agent parallel review). |
+| 3+ tasks, includes `**Risk:** high` task | **Tier C — full suite**, plus extra weight on the relevant specialized reviewer. |
+
+After picking the tier, run the two stages:
 
 ### Stage 1: Parallel Code Review (4 agents simultaneously)
 
@@ -127,7 +160,9 @@ Dispatch all 4 specialized reviewers in parallel, each with the files changed du
 Wait for all 4 to complete. Aggregate and deduplicate results: when multiple reviewers flag the same file:line, merge into a single finding and note which reviewers reported it. This prevents the implementer from receiving duplicate fix instructions.
 
 - If ALL return APPROVED → proceed to Stage 2
-- If ANY return ISSUES → dispatch implementer with the deduplicated findings from all reviewers that found issues, then **continue the same reviewer agents** (via `SendMessage`) rather than spawning fresh ones. The reviewer already knows what it flagged — a continued agent produces a more focused re-review ("did you fix the issue I reported?") and avoids re-reading all files from scratch. Only re-run reviewers that failed. Max 3 fix cycles per phase, then proceed with noted concerns.
+- If ANY return ISSUES → dispatch implementer with the deduplicated findings from all reviewers that found issues, then **continue the same reviewer agents** (via `SendMessage`) rather than spawning fresh ones. The reviewer already knows what it flagged — a continued agent produces a more focused re-review ("did you fix the issue I reported?") and avoids re-reading all files from scratch. Only re-run reviewers that failed.
+- **Severity-gated re-review.** Only re-dispatch a reviewer when its findings include CRITICAL or MAJOR items. MINOR/style/nit findings are noted in the phase report and not re-reviewed — they fold into the final spec review or are accepted. This prevents reviewer ping-pong where a fix introduces a new MINOR finding that triggers another fix that introduces another MINOR finding.
+- **Re-review fix cap: 2 cycles per phase** (down from 3). After 2 cycles, accept remaining MAJOR-and-below findings as noted concerns and proceed. CRITICAL findings still block — escalate to the user.
 - Critical findings from any reviewer block progression until resolved.
 
 ### Stage 2: Test Coverage Review
@@ -204,9 +239,13 @@ If 3 remediation cycles are exhausted and gaps remain, dispatch the `auto-debugg
 | Mistake | Fix |
 |---------|-----|
 | Orchestrator writes code itself | Only dispatch agents — never write code |
-| Running reviewers sequentially instead of in parallel | All 4 code reviewers dispatch simultaneously at each phase boundary |
+| One implementer dispatch per task when consecutive tasks share files and pattern | Batch consecutive cohesive tasks (≤4 hrs, overlapping files) into one implementer call |
+| Running the full 4-agent reviewer suite on a 1-task phase | Use Tier A (defer review) for small phases; the final spec-reviewer covers correctness anyway |
+| Re-dispatching reviewers for MINOR/nit findings | Severity-gate re-review to CRITICAL/MAJOR only; let MINOR fold into final review or be accepted |
+| Two `[P]` tasks each <1 hr dispatched as two parallel agents | Bundle small `[P]` tasks into one implementer running sequentially |
+| Running reviewers sequentially instead of in parallel | All reviewers in the chosen tier dispatch simultaneously at the phase boundary |
 | Re-running all reviewers when only some failed | Only re-run reviewers that returned ISSUES |
-| Missing test coverage review at phase boundary | Always run `test-coverage-reviewer` after code review passes |
+| Missing test coverage review at phase boundary | Run `test-coverage-reviewer` after code review passes (skip in Tier A — final spec-reviewer covers it) |
 | Running spec-reviewer at a phase boundary | Spec compliance is checked only during final validation |
 | Pasting the plan file path instead of task text | Inline everything — agents don't read plan files |
 | Ignoring DONE_WITH_CONCERNS | Read concerns before deciding to proceed |
