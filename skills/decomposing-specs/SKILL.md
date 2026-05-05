@@ -77,10 +77,6 @@ Mode: scoped — cross-artifact consistency check across the plan TOC, coverage 
 - **APPROVED or ADVISORY** → hand off to `executing-plans`.
 - **CRITICAL_FINDINGS** → continue the same `decomposer` subagent with the findings. **Max 2 iterations**, then accept best-effort and proceed.
 
-## Why two iterations instead of three
-
-The decomposer's own self-check (in its agent definition) catches the most common structural problems before the reviewer ever sees the artifact. Reviewer iterations exist to catch what the self-check misses; if two passes don't converge, the issue is usually ambiguity in the spec, not iteration count. Best-effort acceptance lets `executing-plans` continue and flags concerns to the user.
-
 ## Hand-off to executing-plans
 
 Pass the **plan directory path**, not the file contents. The executor loads `plan.md` and reads phase files on demand.
