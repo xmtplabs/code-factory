@@ -17,6 +17,17 @@ The output is also split across files (multi-file plan, JIT phase elaboration) s
 
 State-machine diagram: `flow.md`. Open it once for orientation if you need it.
 
+## User-visible progress
+
+This skill can spend a long time inside subagents. Keep the main thread alive with concise, useful updates at each dispatch boundary:
+
+- Before dispatching a subagent, tell the user what is starting and what artifact or review it will produce.
+- When a subagent returns, relay its `## Progress notes for main thread` bullets in plain language. Keep this to 1-3 bullets unless there is a blocker.
+- When a reviewer finds issues, summarize the issue categories and the affected phase files before asking the decomposer to fix them.
+- When a review passes, say which review passed and what that unlocks next.
+- Do not paste plan contents or long reviewer output into the main thread. Link or name paths and summarize decisions, counts, blockers, and review outcomes.
+- If the platform streams subagent messages to the parent/main thread, allow only milestone-level updates: exploration complete, artifacts written, review issues found, review passed, fix iteration complete.
+
 ## Step 1: Dispatch the decomposer subagent
 
 Pick the output directory: `docs/plans/YYYY-MM-DD-<topic>/`. The decomposer creates it.
@@ -36,6 +47,12 @@ Read the spec, explore the codebase, and produce:
 - docs/plans/<topic>/phases/0K-<name>.md for K in 2..N-1 (sketches only)
 
 Self-check structural rules before returning. Return paths and a summary — do not paste file contents back.
+
+Include a `## Progress notes for main thread` section with 2-4 concise bullets covering:
+- major codebase areas explored,
+- phases/artifacts written with task counts,
+- structural self-check result,
+- any concerns or context gaps.
 ```
 
 The decomposer's instructions live in `agents/decomposer.md` — do not duplicate them in the dispatch prompt.
@@ -62,6 +79,8 @@ The reviewer checks: requirement coverage (across the matrix in plan.md), TDD en
 - **APPROVED** → proceed to Step 3.
 - **ISSUES FOUND** → continue the same `decomposer` subagent via `SendMessage` with the findings. The decomposer fixes in-place. Re-run plan-reviewer (continue the same agent — it knows what it flagged). **Max 2 iterations**, then accept best-effort and proceed.
 
+After each plan-reviewer return, relay the overall result plus the pass/fail criteria. If issues were found, include only the affected files and issue categories in the main-thread update; send the detailed findings to the decomposer.
+
 ## Step 3: Task List Review (scoped)
 
 Dispatch the `task-list-reviewer` agent in **scoped mode**:
@@ -76,6 +95,8 @@ Mode: scoped — cross-artifact consistency check across the plan TOC, coverage 
 
 - **APPROVED or ADVISORY** → hand off to `executing-plans`.
 - **CRITICAL_FINDINGS** → continue the same `decomposer` subagent with the findings. **Max 2 iterations**, then accept best-effort and proceed.
+
+After each task-list-reviewer return, relay the overall result plus finding counts by severity. If CRITICAL findings block hand-off, summarize the category and affected requirement/task before the fix iteration.
 
 ## Hand-off to executing-plans
 

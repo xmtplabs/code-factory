@@ -133,6 +133,11 @@ Scope: <list elaborated phase files reviewed>
 **Overall: APPROVED / ISSUES FOUND**
 
 [If ISSUES FOUND, summarize the fixes needed. Group by phase file so the decomposer can target edits.]
+
+## Progress notes for main thread
+- Result: <APPROVED or ISSUES FOUND>
+- Checked: <N requirements, M elaborated tasks, verification phase present/missing>
+- Findings: <1-3 issue categories with affected files, or "none">
 ```
 
 ## Rules

@@ -81,6 +81,11 @@ Scope: <elaborated phase files reviewed>
 
 [If CRITICAL_FINDINGS: list specific remediation suggestions, grouped by file.]
 [If ADVISORY: note MAJOR/MINOR findings but do not block.]
+
+## Progress notes for main thread
+- Result: <APPROVED, ADVISORY, or CRITICAL_FINDINGS>
+- Checked: <N requirements and M tasks across the scoped plan>
+- Findings: <CRITICAL N, MAJOR N, MINOR N; name the main categories if nonzero>
 ```
 
 ## Rules
