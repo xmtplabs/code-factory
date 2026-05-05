@@ -5,7 +5,7 @@ description: Use when given a GitHub issue URL to autonomously implement — for
 
 # Coder Task
 
-Autonomous end-to-end workflow: GitHub issue → spec → task list → implementation → PR on a fork.
+Autonomous end-to-end workflow: GitHub issue → spec → multi-file plan → implementation → PR on a fork.
 
 ## Inputs
 
@@ -76,9 +76,19 @@ git checkout -b fix/issue-${ISSUE_NUMBER}
 
 Skip the fork if one already exists. Skip adding the remote if it's already configured.
 
-## Step 3: Explore the Codebase
+## Step 3: Light Codebase Exploration (for classification + spec writing only)
 
-Dispatch explore subagents to understand the parts of the codebase relevant to the issue. Focus on: files mentioned in the issue, error paths, related tests, and the project's build/test/lint commands.
+Dispatch one or two `Explore` subagents to confirm what's needed for **classifying the issue** and **writing the spec** — nothing more. The `decomposer` agent in Step 6 will do its own deep codebase exploration in its own context; replicating it here just bloats the main context.
+
+Scope:
+- Files mentioned in the issue and their immediate vicinity (for bug reports: error paths and related tests)
+- High-level project shape (language, framework, where the affected subsystem lives)
+- Whether the issue's described behavior actually exists in the current code (for bugs)
+
+Do NOT explore:
+- Pattern files for new code (the decomposer handles this)
+- Reusable helpers / utilities catalog (the decomposer handles this)
+- CI command discovery (the decomposer handles this and writes it to `standards.md`)
 
 ## Step 4: Classify Issue
 
@@ -136,11 +146,13 @@ Use the `decomposing-specs` skill to break the spec into a multi-file phased tas
 
 ## Step 7: Execute
 
-Use the `executing-plans` skill to implement the task list. This handles:
-- Sequential and parallel implementer dispatch
-- Phase-boundary reviews (4 parallel code reviewers + test coverage review)
+Use the `executing-plans` skill to implement the plan. Pass it the plan directory path (`docs/plans/YYYY-MM-DD-issue-${ISSUE_NUMBER}/`), not individual files. This handles:
+- On-demand phase loading (only `plan.md` + `standards.md` at startup; phase files load one at a time)
+- Just-in-time phase elaboration via `phase-elaborator` for sketched phases (so Phase N is fleshed out against the post-Phase-N-1 codebase)
+- Batched / sequential / parallel implementer dispatch
+- Size-scaled phase-boundary reviews (Tier A defer for tiny phases, Tier B focused for risky tiny phases, Tier C full suite for ≥3-task phases) with severity-gated re-review
 - Final CI verification + full spec review
-- Remediation of any gaps + auto-debug escalation
+- Remediation + auto-debug escalation
 
 ## Step 8: Push & PR
 
@@ -176,8 +188,8 @@ gh issue comment ${ISSUE_URL} --body "<explanation of what was tried and why it 
 The user may interrupt with comments adding requirements or clarifications. When this happens:
 
 1. Update the spec (both the issue comment and the local file)
-2. Re-run `decomposing-specs` to produce an updated task list
-3. Continue execution from where the change applies — if prior work is still valid, don't redo it
+2. Re-run `decomposing-specs` — the `decomposer` rewrites `plan.md`, `standards.md`, and the phase files in place. Phases already executed stay on disk; the new plan should preserve their structure where the requirements still hold.
+3. Resume `executing-plans` from the earliest affected phase. Sketched phases automatically pick up the new requirements when the `phase-elaborator` runs at their boundary — no manual rework for sketches. Don't redo work whose requirements are unchanged.
 
 ## Autonomy Rule
 
