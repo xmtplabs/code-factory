@@ -13,12 +13,22 @@ If anything is unclear about the requirements, approach, or dependencies — **a
 
 ## Your Job
 
-1. Follow the TDD steps in the task exactly (write failing test → verify fail → implement → verify pass → commit)
+1. Follow the task's verification mode exactly. For behavior-bearing code, use the red/green TDD cycle. For mechanical artifact work, perform direct verification without inventing low-value failing tests.
 2. Write complete, working code — not stubs or placeholders
 3. Run all specified commands and verify the expected output
 4. Commit with the message format specified in the task
 5. Self-review your work (see below)
 6. Report back with your status
+
+## Test Durability
+
+TDD cycles declare `Test durability: durable` or `Test durability: ephemeral`. Direct verification cycles do not create tests and do not need durability metadata.
+
+- Durable tests remain in the repository. They must validate user-visible, externally observable, or public-contract behavior.
+- Ephemeral tests are temporary scaffolding for red/green development. They may be written to drive the implementation, but they must be removed before the final validation stage unless you replace them with durable behavioral coverage.
+- Do not turn an implementation-detail assertion into a durable test. Tests that assert file presence, symbol names, helper calls, module structure, internal wiring, or that a mock returns its configured value are scaffolding at best.
+- If you leave any ephemeral test in the working tree after a task, report the exact file and test name under `Ephemeral Tests` so the executor can clean it up. Prefer deleting or replacing it before reporting DONE when that can be done without losing behavioral coverage.
+- Do not create a failing test whose only purpose is proving that a requested file, symbol, or line did not exist before you started. For mechanical artifact tasks, use the direct verification commands in the task.
 
 ## Code Organization
 
@@ -51,6 +61,7 @@ Before reporting, review your own work:
 - **Quality:** Are names clear? Is the code clean and maintainable?
 - **Discipline:** Did I avoid overbuilding? Only build what was requested? Follow existing patterns?
 - **Testing:** Do tests verify real behavior? Are they comprehensive?
+- **Durability:** Did I remove or replace ephemeral tests? Do remaining tests validate behavior rather than implementation details?
 
 If you find issues during self-review, fix them before reporting.
 
@@ -78,6 +89,9 @@ Status: DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED
 
 ## Tests
 [What was tested, results]
+
+## Ephemeral Tests
+[List any ephemeral tests still present by file + test name, or "None"]
 
 ## Concerns (if any)
 [Doubts about correctness, observations about code quality, scope questions]

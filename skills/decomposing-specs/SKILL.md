@@ -1,6 +1,6 @@
 ---
 name: decomposing-specs
-description: Use when you have a design spec from writing-specs and need to break it into an implementable, phased task plan with TDD enforcement before writing any code
+description: Use when you have a design spec from writing-specs and need to break it into an implementable, phased task plan with behavior-focused verification before writing any code
 ---
 
 # Decomposing Specs into Task Plans
@@ -74,7 +74,7 @@ Elaborated phase paths:
 Mode: scoped — review only the elaborated phases plus the top-level plan and standards. Sketched phases (02..N-1) are intentionally not yet elaborated; they will be reviewed when the phase-elaborator fleshes them out at execution time.
 ```
 
-The reviewer checks: requirement coverage (across the matrix in plan.md), TDD enforcement (in elaborated phases), CI verification (in the Verification phase file), and idiomatic-code citations (every elaborated task cites standards.md and lists deltas, with reuse-first justifications).
+The reviewer checks: requirement coverage (across the matrix in plan.md), verification mode selection (TDD for behavior-bearing code, direct verification for mechanical artifact work), test durability marking (`durable` vs `ephemeral` with retention reasons), CI verification (in the Verification phase file), and idiomatic-code citations (every elaborated task cites standards.md and lists deltas, with reuse-first justifications).
 
 - **APPROVED** → proceed to Step 3.
 - **ISSUES FOUND** → continue the same `decomposer` subagent via `SendMessage` with the findings. The decomposer fixes in-place. Re-run plan-reviewer (continue the same agent — it knows what it flagged). **Max 2 iterations**, then accept best-effort and proceed.
@@ -114,5 +114,7 @@ Plan dir: docs/plans/<topic>/
 | Pasting file contents into the dispatch prompt | The decomposer reads the spec from disk. Pass the path. |
 | Pre-elaborating phases 2..N-1 to "save a step" | Sketches reflect post-Phase-1 codebase reality at elaboration time. Pre-elaborating defeats JIT. |
 | Reviewing all phase files at decomposition time | Review only elaborated phases (Phase 1 + Verification). The phase-elaborator handles per-phase review later. |
+| Writing failing tests just to prove a file/symbol doesn't exist | Use direct verification for mechanical artifact changes. Reserve red/green TDD for behavior-bearing code. |
+| Marking scaffolding tests as durable to satisfy TDD structure | Mark implementation-detail or red/green-only tests as `ephemeral` with cleanup-oriented retention reasons. Durable tests must validate behavior. |
 | Burning iterations on fixes the self-check should have caught | The decomposer self-checks. If it returns DONE but fails review on a self-check item, fix the agent definition, not the iteration cap. |
 | Continuing review iterations past 2 | Two iterations is the cap. Best-effort acceptance is the right move beyond that. |

@@ -56,7 +56,7 @@ Read `docs/plans/<topic>/phases/NN-<name>.md` into context now. This is the only
 
 Walk tasks top to bottom within the phase. For each task (or batch — see below), dispatch the `implementer` agent with:
 
-1. **Task text** — full content from the phase file (files, codebase context deltas, TDD cycles, code snippets). For a batch, inline all tasks in order.
+1. **Task text** — full content from the phase file (files, codebase context deltas, verification cycles, code snippets). For a batch, inline all tasks in order.
 2. **Standards reference** — paste the relevant rows from `standards.md` (or hand the path; small files are fine to inline). Implementers must cite standards.md for shared context but only act on the deltas in the task.
 3. **Context** — what this task is building toward, what prior tasks built, relevant architectural decisions from the spec
 4. **Constraints** — working directory, commit conventions, files not to touch
@@ -95,6 +95,8 @@ If any parallel task fails or blocks, handle individually — don't block the ot
 | **DONE_WITH_CONCERNS** | Read concerns. Correctness/scope issues → dispatch fix. Observations → note and proceed. |
 | **NEEDS_CONTEXT** | Provide missing context (often a row from standards.md), re-dispatch same task |
 | **BLOCKED** | Context problem → provide more context. Too hard → break task down. Plan wrong → generate fix task or re-elaborate phase. |
+
+Track any `Ephemeral Tests` entries reported by implementers. If the report lists anything other than `None`, record the file path, test name, originating task, and whether durable behavioral coverage already exists. Do not treat the presence of ephemeral tests as a task failure during the phase, but do not lose the list — final validation must clean them up.
 
 If an implementer fails the same task 3 times, stop execution and report to the user.
 
@@ -146,13 +148,35 @@ After phase review passes, the phase file's contents are no longer needed in con
 
 ## Step 3: Final Validation
 
-After all phases complete, run two-stage final validation.
+After all phases complete, run three-stage final validation.
 
-### Stage 1: CI Verification
+### Stage 1: Ephemeral Test Cleanup
+
+Before running final CI, remove or rewrite any tests marked or reported as ephemeral during implementation.
+
+Dispatch an `implementer` with:
+- The accumulated `Ephemeral Tests` list from task reports
+- All test files created or modified during execution
+- The phase files for completed phases, or the relevant task excerpts containing `Test durability: ephemeral`
+- The EARS requirements and coverage matrix from `plan.md`
+
+The cleanup implementer must:
+1. Delete ephemeral tests that only assert implementation details or temporary scaffolding
+2. Replace an ephemeral test with durable behavioral coverage when deleting it would leave an EARS requirement without meaningful test coverage
+3. Preserve tests marked `durable` unless they are mislabeled implementation-detail assertions, in which case rewrite them as behavioral tests
+4. Run the affected test files after cleanup
+5. Commit cleanup changes with a plain-English message if files changed
+6. Report whether any ephemeral tests remain
+
+If no implementer reported ephemeral tests, still do a lightweight scan of changed test files for obvious scaffolding tests: file-existence checks, symbol-name checks, helper-call-only assertions, module-structure assertions, empty stubs, and tautological mock assertions. If found, dispatch the cleanup implementer with those candidates.
+
+If ephemeral tests remain after 2 cleanup attempts, stop final validation and surface the remaining file/test names plus the reason they could not be removed. Do not run final CI/spec compliance while known ephemeral tests remain.
+
+### Stage 2: CI Verification
 
 Run the project's full test suite, linter, formatter, and typechecker (commands from `standards.md`). If anything fails, dispatch implementer to fix. Repeat until green or 3 attempts, then report to user.
 
-### Stage 2: Full Spec Compliance
+### Stage 3: Full Spec Compliance
 
 Different from phase reviews. Phase reviews check "did we build what the plan said?" This checks "did we satisfy the original spec?"
 
@@ -173,7 +197,7 @@ It validates:
 If gaps are found:
 
 1. Take the unmet requirements
-2. Generate supplementary tasks (use the elaborated phase format — TDD cycles, codebase context deltas, commands)
+2. Generate supplementary tasks (use the elaborated phase format — verification cycles, codebase context deltas, commands)
 3. Execute them sequentially with the same implementer dispatch pattern
 4. Re-run CI verification, then final spec review
 
@@ -216,6 +240,7 @@ Dispatch `auto-debugger` as a last resort. Provide:
 | Pasting the plan directory path instead of task text into the implementer prompt | Inline the task block + relevant standards rows. Implementers don't read plan files. |
 | Ignoring DONE_WITH_CONCERNS | Read concerns before deciding to proceed |
 | Retrying a blocked implementer without changes | Change something: more context, smaller task, or re-elaborate the phase |
+| Treating ephemeral TDD tests as final coverage | Track them from implementer reports and remove or replace them before final CI |
 | Final review checks plan compliance, not spec | Final review must check EARS requirements from the spec |
 | Including prior attempts in auto-debugger prompt | Auto-debugger must get fresh context — spec, failures, code only |
 | Blocking all parallel tasks when one fails | Handle parallel task failures individually after all resolve |

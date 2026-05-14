@@ -20,14 +20,14 @@ Used for phases 2..N-1 at decomposition time. The `phase-elaborator` will overwr
 
 > This phase is a sketch. Before execution, the `phase-elaborator` will:
 > 1. Re-read the codebase as it stands after preceding phases land
-> 2. Write the full TDD cycles, codebase context references (citing standards.md), and key interfaces for each task
+> 2. Write the full verification cycles, codebase context references (citing standards.md), and key interfaces for each task
 > 3. Self-check structural rules
 ```
 
 ## Rules
 
 - Aim for under 300 words.
-- Do **not** pre-write TDD cycles, pattern citations, or detailed codebase context — the codebase will look different after Phase 1 lands.
+- Do **not** pre-write verification cycles, pattern citations, or detailed codebase context — the codebase will look different after Phase 1 lands.
 - Every non-Verification sketch must list ≥3 task titles, OR carry `**Risk:** high — solo phase justified` with reason.
 - Every EARS requirement assigned to this phase must appear in `EARS coverage:` (also reflected in `plan.md`'s coverage matrix).
 - Anticipated files are best-effort hints — drift between sketch and elaboration is expected and acceptable. The elaborator reports drift back to the orchestrator.

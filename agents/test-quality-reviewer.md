@@ -29,6 +29,8 @@ What to check:
 
 5. **Anti-patterns** — flag these specific problems:
    - Tests that test implementation details instead of behavior (e.g., asserting internal method calls rather than outputs)
+   - Tests marked or reported as durable that only assert implementation details, such as file presence, symbol names, helper calls, module structure, or internal wiring
+   - Ephemeral scaffolding tests left in changed test files without a clear cleanup path
    - Tautological tests (testing that a mock returns what it was configured to return)
    - Wrong-reason passes (test passes but for the wrong reason — e.g., asserting on a default value that happens to match)
    - Empty test stubs (`it('should work', () => {})`)

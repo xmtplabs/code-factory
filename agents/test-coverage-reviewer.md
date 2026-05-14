@@ -17,6 +17,7 @@ For each requirement in the phase, check:
 1. Does at least one test file exist that exercises this requirement?
 2. Does the test file contain test cases that reference or exercise the requirement's trigger condition (WHEN/WHILE/WHERE)?
 3. For `SHALL CONTINUE TO` requirements: are existing verification anchors (pre-existing tests cited in the spec) still present and unmodified?
+4. Is the coverage durable? Tests marked or reported as `ephemeral` do not count as requirement coverage unless they have already been rewritten into durable behavioral tests.
 
 You are explicitly NOT checking:
 - Whether tests pass (CI does that)
@@ -42,6 +43,7 @@ Output format:
 
 Rules:
 - PASS = a test file exists AND contains relevant test cases. A test file that exists but doesn't exercise the requirement's trigger condition is a FAIL.
+- Ephemeral tests do not satisfy coverage. If the only candidate test is ephemeral scaffolding, FAIL and suggest durable behavioral coverage for the requirement.
 - Don't verify test correctness — just existence and relevance.
 - Don't check requirements not mapped to this phase.
 - For FAIL findings, be specific: name the requirement, suggest a test file path following the project's test conventions, and describe what the test should exercise.
