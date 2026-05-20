@@ -33,6 +33,7 @@ Each skill produces a file artifact and can be invoked independently:
 | `writing-specs` | Collaborate on a design spec with EARS requirements, clarification markers, and brownfield gap analysis |
 | `decomposing-specs` | Dispatch a `decomposer` subagent to write a multi-file phased plan (Phase 1 + Verification elaborated; rest sketched for just-in-time elaboration) |
 | `executing-plans` | Execute a multi-file plan with on-demand phase loading, just-in-time elaboration, batched/parallel implementer dispatch, size-scaled phase reviews, and auto-debug escalation |
+| `audit-tests` | Audit test suites for low-value, brittle, duplicative, or AI-generated tests and produce a precise cleanup plan |
 | `coder-task` | End-to-end: GitHub issue → classify bug/feature → spec → tasks → implementation → PR on a fork |
 | `code-factory` | v2 of `coder-task`: same flow with scripted fork/branch/PR steps, requester-as-reviewer, and selective feedback handling |
 | `receiving-feedback` | Classify new issue comments as trivial (do inline) vs. meaningful (update spec, re-decompose) — used by `code-factory` |
