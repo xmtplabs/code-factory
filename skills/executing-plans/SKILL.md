@@ -104,6 +104,27 @@ If an implementer fails the same task 3 times, stop execution and report to the 
 
 After all tasks in the phase complete, scale review depth to phase size and risk.
 
+#### One-Phase-Ahead Elaboration
+
+When the current phase will run Tier B or Tier C review and the next phase exists with status `sketch`, dispatch the next phase's `phase-elaborator` at the same time as the phase-boundary reviewers. This is the only permitted speculative elaboration: at most one upcoming phase, only while review agents are already running, and never while current-phase implementation is still in progress.
+
+Use the normal elaborator prompt from Step 2a, with the current phase summary marked as pending review:
+
+```
+Prior phase summary: <one paragraph: what phase N actually built before review — files created/modified, key decisions, any known concerns>
+Review status: Phase N review is in progress; this elaboration may need a small follow-up adjustment if review fixes materially change files, APIs, dependencies, or EARS coverage.
+```
+
+Do not read the next phase file into the orchestrator's context yet. Let the elaborator overwrite the sketch in-place and report drift in the background while the current phase review continues.
+
+After review and any review-triggered fixes complete:
+
+- If the review caused no material implementation changes, keep the elaborated next phase and process any drift report normally before entering that phase.
+- If fixes materially changed files, APIs, dependencies, task ordering, or EARS coverage that the next phase depends on, send the final phase summary and changed-file delta back to the same `phase-elaborator` for a quick adjustment before Step 2b reads the next phase file.
+- Before entering the next phase, update `plan.md` so the phase row has status `elaborated` and the final task count from the elaborator. If the material changes alter phase boundaries or the coverage matrix, update those rows too. Structural scope changes still pause for the user.
+
+If the current phase is Tier A, skip this optimization; there is no review window to hide the elaboration behind, so the normal Step 2a just-in-time elaboration is cheaper and simpler.
+
 #### Review Tier Selection
 
 | Phase shape | Review tier |
@@ -228,7 +249,7 @@ Dispatch `auto-debugger` as a last resort. Provide:
 |---------|-----|
 | Reading all phase files at startup | Load only `plan.md` and `standards.md` initially. Phase files load one at a time when their turn comes. |
 | Executing a sketched phase without elaborating | If `plan.md` shows status `sketch` for the upcoming phase, dispatch `phase-elaborator` first. |
-| Pre-elaborating future phases speculatively | Phases stay sketched until their turn. The codebase changes between phases; speculative elaboration goes stale. |
+| Pre-elaborating future phases speculatively | Only elaborate one phase ahead during Tier B/C phase review. If review fixes materially change the prior phase, send a follow-up adjustment to the elaborator before reading the next phase. |
 | Ignoring elaborator drift reports | If phase-elaborator reports the sketch was wrong, update plan.md's phase row + coverage matrix before continuing. |
 | Orchestrator writes code itself | Only dispatch agents — never write code |
 | One implementer dispatch per task when consecutive tasks share context | Batch consecutive cohesive tasks (≤4 hrs, overlapping files) into one implementer call |

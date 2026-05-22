@@ -23,11 +23,13 @@ A low-quality test is unlikely to catch a real bug but likely to break during va
    - In single projects, define modules by major source or test directories.
    - Use repository-native metadata where possible: workspaces, package manifests, build files, project files, test config, or CI config.
 
-2. Dispatch explorer subagents by module.
-   - Give each explorer one module or bounded test area.
-   - Ask explorers to inspect tests and return structured findings only.
-   - Do not ask explorers to edit files.
-   - If the repository is small, use one explorer for all tests.
+2. Dispatch bounded audit workers by module when the environment supports it.
+   - Prefer explorer-style subagents when they are available and working.
+   - Give each worker one module or bounded test area.
+   - Ask workers to inspect tests and return structured findings only.
+   - Do not ask workers to edit files.
+   - If the repository is small, use one worker for all tests.
+   - If subagent launch fails because of tool-schema incompatibility, missing tools, or platform limits, stop retrying the same worker type and continue the audit in the parent agent module-by-module.
 
 3. Build a test inventory.
    - Include test file, test name, behavior under test, inputs and states, assertions, setup, mocks/helpers, and related production code.
@@ -56,9 +58,21 @@ A low-quality test is unlikely to catch a real bug but likely to break during va
    - Refactor repeated setup only when it reduces real maintenance burden.
    - Avoid broad unrelated test rewrites.
 
-## Explorer Prompt Template
+## Subagent Compatibility
 
-Use this shape when dispatching module explorers:
+The audit must not fail only because a specific subagent type is unavailable.
+
+In Claude Code, if an Explore subagent fails immediately with an API error like `input_schema does not support oneOf, allOf, or anyOf at the top level`, treat it as a platform/tool-schema incompatibility. Do not retry the same Explore subagent repeatedly. Fall back to one of these approaches:
+
+- Use a different available general-purpose subagent type with the same bounded prompt, if the platform supports it.
+- Run the module audit sequentially in the parent agent, keeping the same report format.
+- For large repositories, process modules in batches and write intermediate notes before synthesizing the final plan.
+
+Preserve the quality bar and output format regardless of whether the audit used parallel workers.
+
+## Worker Prompt Template
+
+Use this shape when dispatching module workers:
 
 ```text
 Audit tests in <module/path>. Do not edit files.
