@@ -14,6 +14,7 @@ Division of labor, by design:
 - **Reviews are adversarial and cross-model**, scaled by per-task risk: mechanical → none, standard → one Claude Opus reviewer, high → Opus + Codex independently. CI's specialized reviewers power the outer loop after the PR opens — there is no phase-boundary reviewer suite.
 - **Plans are granular files, elaborated one phase ahead.** The planner writes a small plan directory (tiny TOC, shared preface, per-phase sketches). Phase N+1's task files are written *while phase N implements* — after the first tasks start, execution almost never waits on planning. A cheap drift check at each boundary triggers re-elaboration only when review/boundary fixes substantially changed what later phases build on. No agent ever loads a plan dossier.
 - **Plan artifacts and throwaway code never reach the repo — enforced at the source.** The elaborator may only specify durable behavioral tests (there is no ephemeral-test concept); all one-off verification lives as `verify` commands in the plan, run once at the boundary and discarded with it. Implementers are forbidden from writing scaffolding tests, scratch code, or plan vocabulary (EARS ids, task/phase references) into code, tests, or commits. A mechanical hygiene scan opens every phase boundary as the deterministic backstop — so reviewers and CI never spend cycles on it.
+- **The orchestrator learns across phases.** Every phase boundary ends with a retrospective: the workflow collects that phase's correction signals (review findings, failing check groups, flags), a retro agent distills the systemic ones into binding lessons, standing conventions get codified into `preface.md` ("Learned during execution"), and all lessons are injected into every subsequent implementer, reviewer, elaborator, and fixer prompt. A style mistake made in phase 2 is structurally harder to make in phase 3. Lessons are appended after the stable preface so prompt-cache prefixes survive, and logged to `<planDir>/lessons.md` for humans.
 - **Sessions are reused where independence doesn't matter.** Implementer Codex sessions continue across review-fix cycles and chain into dependent tasks touching the same files (context and provider cache carry over); reviewer re-checks after a fix are scoped to the prior findings rather than full re-reviews. Adversarial reviewers are never reused across tasks — a clean context per task is what makes them adversarial.
 
 ## Step 1: Inputs and branch strategy
@@ -51,22 +52,30 @@ The first run returns `{ outcome: "AWAITING_APPROVAL", approvalDoc, phases, flag
 
 The workflow returns `{ outcome, prUrl, phases, flags }`.
 
-- **`PR_OPEN`** — report the PR URL, the per-phase summaries, and every flag verbatim. Flags are the autonomous run's deferred questions: blocked tasks, unresolved review findings, checks that never went green, Codex fallbacks. Don't bury them. Then invoke the `explain-diff-html` skill on the branch/PR diff to produce the walkthrough of the most important changes, and open it for the user alongside the PR URL.
-- **`NEEDS_CONTEXT`** — the spec was too ambiguous to phase. Get answers from the user, then relaunch with `resumeFromRunId` from the first run's tool result (the planner call re-runs with the clarified prompt; nothing else is lost). Include the answers by appending them to the spec file first — the planner reads the spec, not your prompt.
+- **`PR_OPEN`** (CI confirmed green) — report the PR URL, the per-phase summaries, and every flag verbatim. Flags are the autonomous run's deferred questions: blocked tasks, unresolved review findings, Codex fallbacks. Don't bury them. Then invoke the `explain-diff-html` skill on the branch/PR diff to produce the walkthrough of the most important changes, and open it for the user alongside the PR URL.
+- **`PR_OPEN_WITH_FAILURES`** — the PR exists but CI is not confirmed green (see `ciGreen` and per-phase `boundaries` in the result). Report exactly which gates are red/unverified before anything else, then proceed as for PR_OPEN.
+- **`NEEDS_CONTEXT`** — the spec was too ambiguous to phase. Get answers from the user, then relaunch with `resumeFromRunId` plus `"clarifications": "<the answers>"` in args — the clarifications are interpolated into the planner's prompt, which invalidates exactly that cached call so planning re-runs with the answers. (Passing answers any other way replays the cached NEEDS_CONTEXT result forever.)
+- **`BRANCH_SETUP_FAILED`** — dirty working tree or checkout failure, caught before any tokens were spent on planning. Resolve the git state with the user, then relaunch fresh.
+- **`FEEDBACK_FAILED`** — the user's conditional approval feedback could not be applied to the plan. Nothing was implemented. Show the detail, resolve with the user, relaunch with revised feedback.
 - **`NO_PR`** — implementation finished but PR creation failed. The branch exists locally/pushed; open the PR manually with `gh`, then report.
 - **Killed or died mid-run** — relaunch with the same `scriptPath` + `args` + `resumeFromRunId`; completed agent calls replay from cache and execution continues from the first incomplete step.
 
 ## Model map
 
-The model tables live in `workflow.js` (`MODELS` + `REVIEW_CODEX` constants). The governing principle: **implementation is never high-complexity work** — expensive models plan ahead of it and review behind it; hard tasks are decomposed until they're average, and subtlety buys more review (`risk: high`), not a bigger implementer.
+The model tables live in `workflow.js` (`MODELS`, `REVIEW_TASK_CODEX`, `REVIEW_DEEP_CODEX`). The governing principle: **implementation is never high-complexity work** — expensive models plan ahead of it and review behind it; hard tasks are decomposed until they're average, and subtlety buys more review (`risk: high`), not a bigger implementer.
 
 | Role | Codex (primary) | Anthropic (fallback) |
 |------|-----------------|----------------------|
-| implement: simple | terra, low effort | haiku |
-| implement: average | terra, medium effort | sonnet |
-| per-task adversarial review (risk: standard/high) | sol, high effort (2nd reviewer on high risk) | opus, high effort |
-| plan review + final sweeps | sol, xhigh effort | opus, xhigh effort |
+| implement: simple | gpt-5.6-terra, low effort | haiku |
+| implement: average | gpt-5.6-terra, medium effort | sonnet |
+| per-task adversarial review (risk: standard and high) | — (always Claude) | opus, high effort |
+| cross-model 2nd reviewer (risk: high only) | gpt-5.6-sol, high effort | opus, high effort |
+| plan review + final sweeps | gpt-5.6-sol, xhigh effort | opus, xhigh effort |
 | planner / elaborator (always Claude) | — | opus, xhigh effort |
+| boundary hygiene + running checks | — | haiku |
+| CI watch (reads bot review comments too) | — | sonnet |
+
+Running verifications is mechanical — execute commands, capture exit codes — so it sits on the cheapest tier. The one piece of judgment there is grouping failures by root cause so parallel fixers don't collide on the same file; that instruction is explicit in the prompt. CI watch stays a tier up because it also interprets bot review comments.
 
 Codex runs with `sandbox: danger-full-access` and `approval-policy: never` via the `codex-runner` agent — full permissions, no prompts. Every Codex call writes a run log (config, full prompt, verbatim final response, conversation id) to `<planDir>/runs/`, and the full inner transcript is in `~/.codex/sessions/` under that conversation id. If the Codex MCP fails twice, the whole run falls back to the Anthropic column and a flag records it. If the user's Codex model names differ, edit `MODELS` before launching.
 
@@ -87,4 +96,4 @@ Codex runs with `sandbox: danger-full-access` and `approval-policy: never` via t
 | Treating flags as failure | Flags are the designed output of autonomy — surface all of them, let the user triage. |
 | Relaunching a failed run fresh | Always pass `resumeFromRunId` — completed implementation replays from cache instead of re-running. |
 | Pre-elaborating later phases by editing the plan directory mid-run | Elaboration is just-in-time on purpose; earlier phases change what later phases should build. |
-| Answering NEEDS_CONTEXT questions only in the relaunch prompt | Append answers to the spec file — the planner reads the spec, not the launch prompt. |
+| Answering NEEDS_CONTEXT questions anywhere but `args.clarifications` | Only a changed planner prompt invalidates the cached call — spec edits alone replay the stale NEEDS_CONTEXT result. |

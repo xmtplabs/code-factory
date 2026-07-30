@@ -1,32 +1,32 @@
 export const meta = {
   name: 'execute-dynamic-workflow',
   description: 'Take a design spec from plan to PR with green CI: plan-approval gate, JIT-elaborated phases, cross-model implement/review loops, phase-boundary verification',
-  whenToUse: 'Dispatched by the execute-dynamic-workflow skill with args {specPath, planDir, repoRoot, baseBranch, branch, prTitle, approved?, feedback?}',
+  whenToUse: 'Dispatched by the execute-dynamic-workflow skill with args {specPath, planDir, repoRoot, baseBranch, branch, prTitle, approved?, feedback?, clarifications?}',
   phases: [
-    { title: 'Plan', detail: 'planner explores + writes plan dir, adversarial plan review, approval page' },
+    { title: 'Plan', detail: 'branch setup, planner explores + writes plan dir, adversarial plan review, approval page' },
     { title: 'Deliver', detail: 'PR, CI to green, final adversarial sweeps' },
   ],
 }
 
 // ============================== Configuration ==============================
-// Model map per task difficulty. Codex names must match `codex` CLI models;
-// effort maps to model_reasoning_effort. Anthropic side is the fallback when
-// the Codex MCP is unavailable or failing.
+// Model map per task difficulty. Codex names must match the Codex account's
+// model strings; effort maps to model_reasoning_effort. Anthropic side is the
+// fallback when the Codex MCP is unavailable or failing.
 // Implementation is NEVER high-complexity — hard problems are handled by
 // expensive planning/elaboration up front and expensive review behind, with
 // implementers in the middle doing well-specified work. Subtle tasks get
 // difficulty=average plus risk=high (two reviewers), not a bigger model.
 const MODELS = {
-  simple: { codex: { model: 'terra', effort: 'low' }, anthropic: { model: 'haiku', effort: 'medium' } },
-  average: { codex: { model: 'terra', effort: 'medium' }, anthropic: { model: 'sonnet', effort: 'medium' } },
+  simple: { codex: { model: 'gpt-5.6-terra', effort: 'low' }, anthropic: { model: 'haiku', effort: 'medium' } },
+  average: { codex: { model: 'gpt-5.6-terra', effort: 'medium' }, anthropic: { model: 'sonnet', effort: 'medium' } },
 }
 // Review tiers: per-task review is scoped to one diff — High is enough.
 // Plan review and final sweeps guard the entire run — XHigh.
-const REVIEW_TASK_CODEX = { model: 'sol', effort: 'high' }   // cross-model reviewer on risk=high tasks (pairs with Opus High)
-const REVIEW_DEEP_CODEX = { model: 'sol', effort: 'xhigh' }  // plan review + final sweeps (pairs with Opus XHigh fallback)
+const REVIEW_TASK_CODEX = { model: 'gpt-5.6-sol', effort: 'high' }   // cross-model 2nd reviewer on risk=high tasks
+const REVIEW_DEEP_CODEX = { model: 'gpt-5.6-sol', effort: 'xhigh' }  // plan review + final sweeps
 const MAX_FIX_CYCLES = 2      // per-task review→fix cycles
-const MAX_CHECK_ROUNDS = 3    // phase-boundary check→fix rounds
-const MAX_CI_ROUNDS = 3       // CI watch→fix rounds
+const MAX_CHECK_ROUNDS = 3    // phase-boundary fix rounds (plus a final observation)
+const MAX_CI_ROUNDS = 3       // CI fix rounds (plus a final observation)
 const MAX_PLAN_REVIEW_CYCLES = 2
 
 // ============================== Schemas ==============================
@@ -51,7 +51,7 @@ const PLAN_SCHEMA = {
     status: { enum: ['DONE', 'NEEDS_CONTEXT'] },
     questions: STR_ARR,
   },
-  required: ['status', 'preface', 'phases', 'checks'],
+  required: ['status'],
 }
 const TASKS_SCHEMA = {
   type: 'object',
@@ -70,6 +70,7 @@ const TASKS_SCHEMA = {
         required: ['id', 'title', 'difficulty', 'risk', 'files', 'deps', 'context'],
       },
     },
+    needsReelaboration: { type: 'boolean' },
     phaseNotes: STR_ARR,
     flags: STR_ARR,
   },
@@ -100,6 +101,8 @@ const REVIEW_SCHEMA = {
         required: ['severity', 'summary'],
       },
     },
+    conversationId: { type: 'string' },
+    codexUnavailable: { type: 'boolean' },
   },
   required: ['verdict', 'findings'],
 }
@@ -127,12 +130,20 @@ const PR_SCHEMA = {
   properties: { url: { type: 'string' }, notes: { type: 'string' } },
   required: ['url'],
 }
-const SUMMARY_SCHEMA = {
+const BRANCH_SCHEMA = {
+  type: 'object',
+  properties: { success: { type: 'boolean' }, branch: { type: 'string' }, notes: { type: 'string' } },
+  required: ['success', 'branch'],
+}
+// One agent closes each phase: it reads the phase's diff once and returns the
+// landed summary, the drift verdict, and the distilled lessons together.
+const RETRO_SCHEMA = {
   type: 'object',
   properties: {
     summary: { type: 'string' },
     substantialDrift: { type: 'boolean' },
     driftNotes: { type: 'string' },
+    lessons: STR_ARR,
   },
   required: ['summary', 'substantialDrift'],
 }
@@ -140,19 +151,31 @@ const SUMMARY_SCHEMA = {
 // ============================== State ==============================
 const flags = []           // issues to surface at the end — never stop for them
 const phaseSummaries = []  // one paragraph per completed phase, fed to next elaboration
+const boundaryResults = [] // {phase, green} per phase boundary — reported honestly at the end
 const ephemeralTests = []  // accumulated from implementer reports, cleaned per boundary
 const implConvos = new Map() // taskId -> {conversationId, difficulty, files, claimed} for chain reuse
+// Feedback loop owned by this orchestrator: correction signals accumulate per
+// phase (retroSignals), a retro agent distills them into binding lessons at
+// the boundary, and lessons are injected into every later prompt.
+const lessons = []       // distilled cross-phase guidance, grows at phase boundaries
+const retroSignals = []  // raw correction signals for the current phase, reset each phase
 let codexFailures = 0
 let codexHealthy = true
 let preface = ''
+let ciGreen = false
 
 // ============================== Prompts ==============================
+// Commits use the pathspec form (`git commit -m "..." -- <files>`) so that a
+// commit only ever includes the named paths, even when a concurrently-running
+// agent has staged other files in the shared index.
+const commitRule = 'Commit with: git add <only your files> then git commit -m "<plain-English behavior summary>" -- <only your files>. The `-- <files>` pathspec is mandatory — it protects concurrent agents sharing the git index. No stash, rebase, amend, checkout, or branch commands.'
+
 const implRules = `## Implementer rules
 - Write complete, working code — no stubs, no placeholders, no TODO paths.
 - Write every listed test, plus any needed to pin behavior you added — durable behavioral tests only. Write them; do NOT run them. Never write scaffolding tests (file-existence, symbol-name, module-structure, or mock-echo assertions) and never commit scratch scripts, debug code, or one-off verification — observations go in your report, and the plan's verify commands run at the phase boundary. If you committed a temporary artifact anyway, list it under ephemeral tests so the boundary removes it; that is a deviation, not a workflow.
 - Do not run build, test, lint, format, or typecheck commands, and do not start dev servers. Verification happens at the phase boundary.
 - Only make substantive edits to files listed under "Files you own". For files listed under "Shared", make only the minimal append-style edit described; other tasks may touch those files concurrently — re-read a shared file immediately before editing it, and if your edit conflicts on commit, re-apply just your lines.
-- Git: exactly one commit for this task: git add <only your files> then git commit with a plain-English behavior summary. No stash, rebase, amend, checkout, or branch commands.
+- Git: exactly one commit for this task. ${commitRule}
 - No plan vocabulary anywhere in code, tests, identifiers, comments, or the commit message: no task ids, phase numbers, requirement ids, or "per the plan" references.
 - If you need a paragraph-long comment to justify a workaround, the code is wrong — fix the code.
 - If you cannot proceed without an architectural decision or missing information, stop and report BLOCKED with the specific question. Bad work is worse than no work.
@@ -179,23 +202,40 @@ function codexBriefing(m, sandbox, prompt, continueId, label) {
   ].join('\n')
 }
 
-const adversarialInline = `Adversarially review this change with a clean eye. Assume the code is wrong and try to prove it. Priorities: (1) for each requirement listed, locate the exact code satisfying it and a test that would catch its removal — missing either is CRITICAL; (2) correctness under hostile inputs — boundaries, error paths, concurrency, cleanup, eager-vs-lazy; (3) paragraph-long justification comments mean the code is wrong; (4) stubs, swallowed errors, tests that assert mocks. Ignore style/formatting (CI owns those). Report only findings you can anchor to a file and a concrete failure scenario, each as: severity CRITICAL|MAJOR|MINOR, file, one-sentence defect, scenario, requirement id or n/a. End with verdict PASS or ISSUES (MINOR-only is PASS).`
+// Appended AFTER the preface in prompts: the preface stays a byte-identical
+// cache-friendly prefix, and this block only changes at phase boundaries.
+function lessonsBlock() {
+  return lessons.length ? `\n\n## Lessons from earlier phases (binding — follow these)\n${lessons.map((l) => `- ${l}`).join('\n')}` : ''
+}
+
+const adversarialInline = `Adversarially review this change with a clean eye. Assume the code is wrong and try to prove it. Priorities: (1) for each requirement listed, locate the exact code satisfying it and a test that would catch its removal — missing either is CRITICAL; (2) correctness under hostile inputs — boundaries, error paths, concurrency, cleanup, eager-vs-lazy; (3) paragraph-long justification comments mean the code is wrong; (4) stubs, swallowed errors, tests that assert mocks. Ignore style/formatting (CI owns those). Report only findings you can anchor to a file and a concrete failure scenario, each with severity CRITICAL|MAJOR|MINOR. Verdict PASS or ISSUES (MINOR-only is PASS).`
 
 // ============================== Helpers ==============================
+function codexFailed() {
+  codexFailures += 1
+  if (codexFailures >= 2 && codexHealthy) {
+    codexHealthy = false
+    flags.push('Codex MCP marked unhealthy after repeated failures — remaining work ran on Anthropic fallback models')
+    log('Codex unavailable twice — falling back to Anthropic models for the rest of the run')
+  }
+}
+
 async function runCodex(m, sandbox, prompt, opts, continueId) {
   if (!codexHealthy) return null
   const r = await agent(codexBriefing(m, sandbox, prompt, continueId, opts && opts.label), {
     agentType: 'code-factory:codex-runner', schema: RUNNER_SCHEMA, ...opts,
   })
-  if (!r || r.status === 'CODEX_UNAVAILABLE') {
-    codexFailures += 1
-    if (codexFailures >= 2) {
-      codexHealthy = false
-      flags.push('Codex MCP marked unhealthy after repeated failures — remaining work ran on Anthropic fallback models')
-      log('Codex unavailable twice — falling back to Anthropic models for the rest of the run')
-    }
-    return null
-  }
+  if (!r || r.status === 'CODEX_UNAVAILABLE') { codexFailed(); return null }
+  return r
+}
+
+// Review-mode Codex call: the runner reports Codex's verdict/findings through
+// REVIEW_SCHEMA directly — no regex inference on free-text summaries.
+async function runCodexReview(m, prompt, opts, continueId) {
+  if (!codexHealthy) return null
+  const briefing = `MODE: review — after the Codex call completes, report Codex's verdict and findings through the structured output (verdict PASS|ISSUES; one findings entry per defect with severity/file/summary/scenario; include the conversation id). If Codex is unavailable after one retry, set codexUnavailable=true with verdict PASS and empty findings.\n${codexBriefing(m, 'read-only', prompt, continueId, opts && opts.label)}`
+  const r = await agent(briefing, { agentType: 'code-factory:codex-runner', schema: REVIEW_SCHEMA, ...opts })
+  if (!r || r.codexUnavailable) { codexFailed(); return null }
   return r
 }
 
@@ -212,11 +252,30 @@ async function implement(task, prompt, opts, continueId) {
 function recordResult(task, r) {
   if (!r || r.status === 'BLOCKED') {
     flags.push(`Task ${task.id} (${task.title}) ended BLOCKED: ${r ? r.summary : 'agent died'}`)
+    log(`  ✗ ${task.id} ${task.title} — BLOCKED: ${r ? firstSentence(r.summary, 110) : 'agent died'}`)
     return false
   }
   if (r.ephemeralTests && r.ephemeralTests.length) ephemeralTests.push(...r.ephemeralTests)
   if (r.status === 'DONE_WITH_CONCERNS' && r.concerns) flags.push(`Task ${task.id} concern: ${r.concerns}`)
   return true
+}
+
+// Narration: the orchestrator is the only layer that sees every result, so it
+// is the only layer that can tell the story. These helpers turn results the
+// script already holds into user-facing progress lines — no extra dispatches.
+function firstSentence(text, max) {
+  if (!text) return ''
+  const clean = String(text).replace(/\s+/g, ' ').trim()
+  const cut = clean.indexOf('. ')
+  const s = cut > 0 && cut < max ? clean.slice(0, cut) : clean
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+function narrateTask(task, impl, verdict) {
+  const what = firstSentence(impl && impl.summary, 100) || task.title
+  const n = (impl && impl.filesChanged && impl.filesChanged.length) || (task.files && task.files.length) || 0
+  const eng = impl && impl.engine === 'anthropic' ? ', claude' : ''
+  log(`  ✓ ${task.id} ${what} (${n} file${n === 1 ? '' : 's'}${eng})${verdict ? ` — review ${verdict}` : ''}`)
 }
 
 function registerConvo(task, impl) {
@@ -225,6 +284,8 @@ function registerConvo(task, impl) {
   }
 }
 
+// Returns 'DONE' or 'FAILED'. FAILED means dependents must not build on this
+// task: implementation blocked/died, or review ended with unresolved CRITICALs.
 async function runTask(task, phaseLabel) {
   // Chain reuse: continue the Codex session of a completed dependency that
   // touched the same files — its context (and provider cache) already holds
@@ -241,16 +302,16 @@ async function runTask(task, phaseLabel) {
     }
   }
   const prompt = chainId
-    ? `${taskBlock(task)}\n\n(Conventions: ${args.planDir}preface.md — consult only if needed.)\n\n${implRules}`
-    : `${preface}\n\n${taskBlock(task)}\n\n${implRules}`
+    ? `${taskBlock(task)}${lessonsBlock()}\n\n(Conventions: ${args.planDir}preface.md — consult only if needed.)\n\n${implRules}`
+    : `${preface}${lessonsBlock()}\n\n${taskBlock(task)}\n\n${implRules}`
   let impl = await implement(task, prompt, { label: `impl:${task.id}`, phase: phaseLabel }, chainId)
-  if (!recordResult(task, impl)) return
+  if (!recordResult(task, impl)) return 'FAILED'
   registerConvo(task, impl)
 
   const nReviewers = task.risk === 'high' ? 2 : task.risk === 'standard' ? 1 : 0
-  if (nReviewers === 0) return
+  if (nReviewers === 0) { narrateTask(task, impl, null); return 'DONE' }
 
-  const reviewBody = () => `${preface}\n\nReview the implementation of: ${task.title}\nCommits: ${(impl.commits || []).join(', ') || 'most recent commits touching ' + task.files.join(', ')}\nFiles: ${task.files.join(', ')}\nRequirements:\n${(task.ears || []).map((e) => `- ${e}`).join('\n') || '- n/a'}\nTask context: ${task.context}`
+  const reviewBody = () => `${preface}${lessonsBlock()}\n\nReview the implementation of: ${task.title}\nCommits: ${(impl.commits || []).join(', ') || 'most recent commits touching ' + task.files.join(', ')}\nFiles: ${task.files.join(', ')}\nRequirements:\n${(task.ears || []).map((e) => `- ${e}`).join('\n') || '- n/a'}\nTask context: ${task.context}`
 
   let priorFindings = null
   let codexReviewId = null
@@ -267,42 +328,70 @@ async function runTask(task, phaseLabel) {
     })]
     if (nReviewers === 2) {
       reviewers.push(async () => {
-        const r = await runCodex(REVIEW_TASK_CODEX, 'read-only',
+        const r = await runCodexReview(REVIEW_TASK_CODEX,
           codexReviewId ? reviewBody() + recheck : `${reviewBody()}\n\n${adversarialInline}`,
           { label: `review-x:${task.id}`, phase: phaseLabel }, codexReviewId)
-        if (!r) return agent(`${reviewBody() + recheck}\n\nTake a security-and-data-integrity lens in addition to correctness.`, {
+        if (r) { codexReviewId = r.conversationId || codexReviewId; return r }
+        return agent(`${reviewBody() + recheck}\n\nTake a security-and-data-integrity lens in addition to correctness.`, {
           agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: 'high',
           schema: REVIEW_SCHEMA, label: `review-x:${task.id}`, phase: phaseLabel,
         })
-        codexReviewId = r.conversationId || codexReviewId
-        // Codex runner returns RUNNER_SCHEMA; map its summary into findings form
-        const issues = /ISSUES/.test(r.summary) || r.status === 'DONE_WITH_CONCERNS'
-        return { verdict: issues ? 'ISSUES' : 'PASS', findings: issues ? [{ severity: 'MAJOR', summary: r.summary }] : [] }
       })
     }
-    const results = (await parallel(reviewers)).filter(Boolean)
+    // A dead reviewer must not pass the gate: retry once, then flag honestly.
+    let results = (await parallel(reviewers)).filter(Boolean)
+    if (!results.length) results = (await parallel(reviewers)).filter(Boolean)
+    if (!results.length) {
+      flags.push(`Task ${task.id}: review gate UNVERIFIED — all reviewers failed twice`)
+      return 'DONE'
+    }
+    if (results.length < nReviewers) flags.push(`Task ${task.id}: only ${results.length}/${nReviewers} reviewers returned`)
     const findings = results.flatMap((x) => x.findings || []).filter((f) => f.severity !== 'MINOR')
-    if (!results.some((x) => x.verdict === 'ISSUES') || !findings.length) return
+    if (!results.some((x) => x.verdict === 'ISSUES') || !findings.length) {
+      narrateTask(task, impl, cycle === 0 ? 'PASS' : 'PASS after fixes')
+      return 'DONE'
+    }
+    findings.forEach((f) => retroSignals.push(`review ${task.id}: [${f.severity}] ${f.summary}`))
 
     if (cycle === MAX_FIX_CYCLES) {
       flags.push(`Task ${task.id}: unresolved review findings after ${MAX_FIX_CYCLES} fix cycles: ${findings.map((f) => `[${f.severity}] ${f.summary}`).join('; ')}`)
-      return
+      const worst = findings.some((f) => f.severity === 'CRITICAL') ? 'FAILED' : 'DONE'
+      log(`  ${worst === 'FAILED' ? '✗' : '!'} ${task.id} ${task.title} — ${findings.length} unresolved finding(s): ${firstSentence(findings[0].summary, 90)}`)
+      return worst
     }
     priorFindings = findings
+    log(`  ↻ ${task.id} review found ${findings.length} issue(s): ${firstSentence(findings[0].summary, 90)} — fixing`)
     const fixPrompt = `An independent review of your work on "${task.title}" found issues. Resolve every finding, or state precisely why one is wrong instead of changing code. Make one additional commit.\n\nFindings:\n${findings.map((f) => `- [${f.severity}] ${f.file || ''} ${f.summary}${f.scenario ? ` | Scenario: ${f.scenario}` : ''}`).join('\n')}\n\n${implRules}`
     impl = impl.engine === 'codex' && impl.conversationId
       ? await implement(task, fixPrompt, { label: `fix:${task.id}`, phase: phaseLabel }, impl.conversationId)
       : await implement(task, `${preface}\n\n${fixPrompt}\n\nContext — what was built: ${impl.summary}`, { label: `fix:${task.id}`, phase: phaseLabel })
-    if (!recordResult(task, impl)) return
+    if (!recordResult(task, impl)) return 'FAILED'
     registerConvo(task, impl)
   }
+  return 'DONE'
 }
 
-// Wave scheduler: deps must be done; `files` are exclusive locks, `shared` is not.
+// Wave scheduler: deps must be done; `files` are exclusive locks, `shared` is
+// not. Failed tasks propagate: dependents are skipped, never run on top of
+// missing or review-rejected work.
 async function runPhaseTasks(tasks, phaseLabel) {
   const done = new Set()
+  const failed = new Set()
   let pending = [...tasks]
   while (pending.length) {
+    let dropped = true
+    while (dropped) {
+      dropped = false
+      for (const t of [...pending]) {
+        if (t.deps.some((d) => failed.has(d))) {
+          failed.add(t.id)
+          flags.push(`Task ${t.id} (${t.title}) skipped: depends on a failed task`)
+          pending = pending.filter((x) => x.id !== t.id)
+          dropped = true
+        }
+      }
+    }
+    if (!pending.length) break
     const locked = new Set()
     const wave = []
     for (const t of pending) {
@@ -315,35 +404,44 @@ async function runPhaseTasks(tasks, phaseLabel) {
       flags.push(`Dependency deadlock in ${phaseLabel}; skipped tasks: ${pending.map((t) => t.id).join(', ')}`)
       return
     }
-    await parallel(wave.map((t) => () => runTask(t, phaseLabel)))
-    wave.forEach((t) => done.add(t.id))
-    pending = pending.filter((t) => !done.has(t.id))
-    log(`${phaseLabel}: ${done.size}/${tasks.length} tasks complete`)
+    log(`${phaseLabel}: starting ${wave.length} task(s) in parallel — ${wave.map((t) => t.title).join('; ')}`)
+    const results = await parallel(wave.map((t) => () => runTask(t, phaseLabel)))
+    wave.forEach((t, i) => { (results[i] === 'DONE' ? done : failed).add(t.id) })
+    pending = pending.filter((t) => !done.has(t.id) && !failed.has(t.id))
+    log(`${phaseLabel}: ${done.size}/${tasks.length} tasks complete${failed.size ? `, ${failed.size} failed/skipped` : ''}`)
   }
 }
 
+// Returns true only when the full suite is confirmed green.
 async function boundary(phaseLabel, checks) {
-  for (let round = 1; round <= MAX_CHECK_ROUNDS; round++) {
-    // Round 1 opens with a mechanical hygiene pass so plan artifacts and
-    // throwaway code are stripped BEFORE any checks or reviews spend cycles
-    // on them. Prevention lives upstream (elaborator + implementer rules);
-    // this is the deterministic backstop.
-    const hygiene = round === 1
-      ? `First, a hygiene pass on this phase's diff (git diff against the commit where the phase started, or the phase's commits):\n1. Plan-vocabulary scan: grep the changed files for plan structure leaking into code — requirement ids (REQ-, EARS, or the spec's id scheme), phase/task/cycle references ("Phase 2", "Task 3.1", "Cycle B", "satisfies requirement"). Strip or rename every hit so the code reads as if the plan never existed.\n2. Scaffolding-test scan: in changed test files, delete tests that assert file existence, symbol names, module structure, empty stubs, or that a mock returns its configured value — unless deletion would leave a spec requirement without behavioral coverage, in which case rewrite as a behavioral test.${ephemeralTests.length ? `\n3. Implementer-reported temporary artifacts to remove: ${ephemeralTests.join('; ')}.` : ''}\nCommit hygiene fixes (plain-English message) if any files changed.\n\nThen: ` : ''
+  // Hygiene runs once, separately from the check loop: it is a repo-wide
+  // grep-and-strip with no dependency on check results, so fusing it into the
+  // check runner would make every later round re-read instructions it can't
+  // act on. Mechanical work — cheap model.
+  const hygieneResult = await agent(
+    `Hygiene pass on this phase's diff in ${args.repoRoot} (git diff against the commit where the phase started, or the phase's commits):\n1. Plan-vocabulary scan: grep the changed files for plan structure leaking into code — requirement ids (REQ-, EARS, or the spec's id scheme), phase/task/cycle references ("Phase 2", "Task 3.1", "Cycle B", "satisfies requirement"). Strip or rename every hit so the code reads as if the plan never existed.\n2. Scaffolding-test scan: in changed test files, delete tests that assert file existence, symbol names, module structure, empty stubs, or that a mock returns its configured value — unless deletion would leave a spec requirement without behavioral coverage, in which case rewrite as a behavioral test.${ephemeralTests.length ? `\n3. Remove these implementer-reported temporary artifacts: ${ephemeralTests.join('; ')}.` : ''}\nDo not run build/test/lint commands. Commit if any files changed (${commitRule}) Report what you stripped, or "clean".`,
+    { model: 'haiku', effort: 'medium', phase: phaseLabel, label: 'hygiene' },
+  )
+  if (hygieneResult) ephemeralTests.length = 0 // cleared only after hygiene actually ran
+
+  for (let round = 1; ; round++) {
+    // Running commands and reporting exit codes is mechanical; the judgment is
+    // in grouping failures so parallel fixers don't collide on the same file.
+    // Haiku handles both here because the plan's check commands are explicit.
     const check = await agent(
-      `${hygiene}Run the full check suite from ${args.repoRoot}, in order:\n${checks.map((c) => `- ${c}`).join('\n')}\nCapture failures. Group them by subsystem/package so independent fixers can work without touching the same files. For each group report: name, failing commands, implicated files, and a summary with the key error output. Do not fix anything yourself beyond the hygiene pass. green=true only if every command passed.`,
-      { model: 'sonnet', effort: 'medium', schema: CHECKS_SCHEMA, label: `checks:r${round}`, phase: phaseLabel },
+      `Run the full check suite from ${args.repoRoot}, in order:\n${checks.map((c) => `- ${c}`).join('\n')}\nRun every command even if an earlier one fails. Capture failures verbatim. Then group them so independent fixers can work in parallel WITHOUT touching the same files: failures sharing a root cause (e.g. dozens of type errors from one changed signature) are ONE group; failures in different packages/subsystems are separate groups. For each group report: name, failing commands, implicated files, and a summary with the key error output. Fix nothing. green=true only if every command passed.`,
+      { model: 'haiku', effort: 'medium', schema: CHECKS_SCHEMA, label: `checks:r${round}`, phase: phaseLabel },
     )
-    if (round === 1) ephemeralTests.length = 0
-    if (!check) { flags.push(`${phaseLabel}: check agent died`); return }
-    if (check.green) { log(`${phaseLabel}: checks green (round ${round})`); return }
-    if (round === MAX_CHECK_ROUNDS) {
-      flags.push(`${phaseLabel}: checks still failing after ${MAX_CHECK_ROUNDS} rounds: ${check.groups.map((g) => g.name).join(', ')}`)
-      return
+    if (!check) { flags.push(`${phaseLabel}: check agent died — checks UNVERIFIED`); return false }
+    if (check.green) { log(`${phaseLabel}: ✓ all checks green${round > 1 ? ` after ${round - 1} fix round(s)` : ''}`); return true }
+    if (round > MAX_CHECK_ROUNDS) {
+      flags.push(`${phaseLabel}: checks still failing after ${MAX_CHECK_ROUNDS} fix rounds: ${check.groups.map((g) => g.name).join(', ')}`)
+      return false
     }
-    log(`${phaseLabel}: ${check.groups.length} failure group(s), dispatching fixers`)
+    check.groups.forEach((g) => retroSignals.push(`checks: ${g.name} — ${(g.summary || '').slice(0, 200)}`))
+    log(`${phaseLabel}: checks red — fixing ${check.groups.length} group(s): ${check.groups.map((g) => `${g.name} (${firstSentence(g.summary, 60)})`).join('; ')}`)
     await parallel(check.groups.map((g) => () => (async () => {
-      const p = `${preface}\n\nFix this group of failing checks. You may run ONLY the specific failing commands listed while iterating — never the full suite.\nGroup: ${g.name}\nCommands: ${(g.commands || []).join('; ')}\nImplicated files: ${(g.files || []).join(', ')}\nFailure summary:\n${g.summary}\n\nFind root causes — no test deletion, no assertion weakening, no skips. Commit your fix with a plain-English message. No plan vocabulary.`
+      const p = `${preface}${lessonsBlock()}\n\nFix this group of failing checks. You may run ONLY the specific failing commands listed while iterating — never the full suite.\nGroup: ${g.name}\nCommands: ${(g.commands || []).join('; ')}\nImplicated files: ${(g.files || []).join(', ')}\nFailure summary:\n${g.summary}\n\nFind root causes — no test deletion, no assertion weakening, no skips. ${commitRule} No plan vocabulary.`
       const r = await implement({ difficulty: 'average' }, p, { label: `fixer:${g.name}`, phase: phaseLabel })
       if (!r || r.status === 'BLOCKED') flags.push(`${phaseLabel}: fixer for "${g.name}" blocked: ${r ? r.summary : 'agent died'}`)
     })()))
@@ -352,36 +450,51 @@ async function boundary(phaseLabel, checks) {
 
 // ============================== Phase: Plan ==============================
 phase('Plan')
+
+// Branch first, so planning observes the exact tree implementation will start
+// from, and so a dirty checkout is caught before any tokens are spent.
+const branchSetup = await agent(
+  `In ${args.repoRoot}: verify the working tree is clean (git status). If it is dirty, do NOT proceed — report success=false with what you found. Otherwise fetch origin, then create and check out branch ${args.branch} from ${args.baseBranch} (if the branch already exists, check it out). Report success, the branch now checked out, and notes.`,
+  { model: 'haiku', effort: 'low', schema: BRANCH_SCHEMA, phase: 'Plan', label: 'branch-setup' },
+)
+if (!branchSetup || !branchSetup.success || branchSetup.branch !== args.branch) {
+  return { outcome: 'BRANCH_SETUP_FAILED', detail: branchSetup ? `${branchSetup.branch}: ${branchSetup.notes || ''}` : 'agent died', flags }
+}
+
 log('Planning: exploring codebase and writing plan directory')
 let plan = await agent(
-  `Spec path: ${args.specPath}\nOutput directory: ${args.planDir}\nRepo root: ${args.repoRoot}\nBase branch: ${args.baseBranch}\n\nProduce the plan directory per your instructions (plan.md, preface.md, phases/*.md, empty tasks/). Return the structured summary. If the spec is too ambiguous to phase, return NEEDS_CONTEXT with questions.`,
+  `Spec path: ${args.specPath}\nOutput directory: ${args.planDir}\nRepo root: ${args.repoRoot}\nBase branch: ${args.baseBranch}\n${args.clarifications ? `\nClarifications from the developer (answers to earlier questions — treat as authoritative):\n${args.clarifications}\n` : ''}\nProduce the plan directory per your instructions (plan.md, preface.md, phases/*.md, empty tasks/). Return the structured summary. If the spec is too ambiguous to phase, return NEEDS_CONTEXT with questions.`,
   { agentType: 'code-factory:workflow-planner', effort: 'xhigh', schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner' },
 )
-if (!plan || plan.status === 'NEEDS_CONTEXT') {
-  return { outcome: 'NEEDS_CONTEXT', questions: plan ? plan.questions : ['planner agent died'], flags }
+const planIncomplete = (p) => !p || p.status !== 'DONE' || !p.preface || !p.phases || !p.phases.length || !p.checks || !p.checks.length
+if (planIncomplete(plan)) {
+  return {
+    outcome: 'NEEDS_CONTEXT',
+    questions: plan && plan.questions && plan.questions.length ? plan.questions : ['planner returned no usable plan — check the spec and planner output'],
+    flags,
+  }
 }
 preface = plan.preface
 if (plan.flags) flags.push(...plan.flags)
 
 for (let cycle = 1; cycle <= MAX_PLAN_REVIEW_CYCLES; cycle++) {
-  const planReviewPrompt = `Adversarially review the work plan in ${args.planDir} against the spec at ${args.specPath}. Assume the plan is wrong; attack: EARS requirements missing from the coverage matrix or double-assigned; phase seams that leave work unowned or owned twice; dependency errors between phases; phases that cannot be verified by the Checks commands; codebase claims that contradict the actual repo (read the files). Report findings with severity CRITICAL|MAJOR|MINOR and verdict PASS or ISSUES (MINOR-only is PASS).`
-  let review = null
-  const viaCodex = await runCodex(REVIEW_DEEP_CODEX, 'read-only', planReviewPrompt, { label: 'plan-review', phase: 'Plan' })
-  if (viaCodex) review = { verdict: /ISSUES/.test(viaCodex.summary) ? 'ISSUES' : 'PASS', findings: [{ severity: 'MAJOR', summary: viaCodex.summary }] }
-  else review = await agent(planReviewPrompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: 'xhigh', schema: REVIEW_SCHEMA, label: 'plan-review', phase: 'Plan' })
-  if (!review || review.verdict === 'PASS') break
+  const planReviewPrompt = `Adversarially review the work plan in ${args.planDir} against the spec at ${args.specPath}. Assume the plan is wrong; attack: EARS requirements missing from the coverage matrix or double-assigned; phase seams that leave work unowned or owned twice; dependency errors between phases; phases that cannot be verified by the Checks commands; codebase claims that contradict the actual repo (read the files). Severity CRITICAL|MAJOR|MINOR per finding; verdict PASS or ISSUES (MINOR-only is PASS).`
+  let review = await runCodexReview(REVIEW_DEEP_CODEX, planReviewPrompt, { label: 'plan-review', phase: 'Plan' })
+  if (!review) review = await agent(planReviewPrompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: 'xhigh', schema: REVIEW_SCHEMA, label: 'plan-review', phase: 'Plan' })
+  if (!review) { flags.push('Plan review gate UNVERIFIED — reviewer agents failed'); break }
+  if (review.verdict === 'PASS') break
   log(`Plan review found issues (cycle ${cycle}) — dispatching planner fixes`)
   const fixed = await agent(
     `Fix mode. Plan directory: ${args.planDir}. Spec: ${args.specPath}. Apply these adversarial review findings (or rebut with reasons):\n${review.findings.map((f) => `- [${f.severity}] ${f.summary}`).join('\n')}\nReturn the updated structured summary.`,
     { agentType: 'code-factory:workflow-planner', effort: 'xhigh', schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-fix' },
   )
-  if (fixed && fixed.status === 'DONE') { plan = fixed; preface = plan.preface }
+  if (!planIncomplete(fixed)) { plan = fixed; preface = plan.preface }
   if (cycle === MAX_PLAN_REVIEW_CYCLES) flags.push('Plan review issues may remain after max fix cycles')
 }
 log(`Plan ready: ${plan.phases.length} phases`)
 
 // ============================== Approval gate ==============================
-// The one human checkpoint. First launch (no args.approved) writes an HTML
+// The one human checkpoint. First launch (no args.approved) writes a markdown
 // briefing and pauses. The relaunch with resumeFromRunId + approved:true
 // replays everything above from cache, applies feedback (if any), and runs
 // the rest fully autonomously.
@@ -405,34 +518,33 @@ if (args.feedback) {
     `Fix mode. Plan directory: ${args.planDir}. Spec: ${args.specPath}. The developer reviewed the plan and gave this feedback — apply it (update plan.md / preface.md / phase sketches as needed) and return the updated structured summary:\n${args.feedback}`,
     { agentType: 'code-factory:workflow-planner', effort: 'xhigh', schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-feedback' },
   )
-  if (revised && revised.status === 'DONE') { plan = revised; preface = plan.preface }
-  else flags.push('Applying plan feedback failed — proceeded with the plan as approved-page written; verify the feedback was honored')
+  if (planIncomplete(revised)) {
+    // The user's approval was conditional on this feedback. Proceeding with
+    // the unmodified plan would implement something they did not approve.
+    return { outcome: 'FEEDBACK_FAILED', detail: revised && revised.questions ? revised.questions.join('; ') : 'planner could not apply the feedback', planDir: args.planDir, flags }
+  }
+  plan = revised
+  preface = plan.preface
 }
 
 // ============================== Execution phases ==============================
 // Wall-clock: elaboration is pipelined one phase ahead. Phase N+1's elaborator
-// starts the moment phase N's tasks begin implementing; a cheap drift check at
-// the boundary triggers re-elaboration only when review/boundary fixes
-// substantially changed what later phases build on (expected to be rare).
+// starts the moment phase N's tasks begin implementing; a drift check at the
+// boundary (plus the elaborator's own needsReelaboration signal) triggers
+// re-elaboration only when it is actually needed (expected to be rare).
 const NN = (id) => String(id).padStart(2, '0')
 
 function elaborate(p, extraNote) {
   const landed = phaseSummaries.map((s) => `- ${s}`).join('\n') || '- nothing yet (first phase)'
   return agent(
-    `Plan directory: ${args.planDir}\nPhase id: ${p.id} (phases/${NN(p.id)}-${p.slug}.md)\nSpec: ${args.specPath}\nRepo root: ${args.repoRoot}\nWhat prior phases actually landed:\n${landed}${extraNote ? `\n\n${extraNote}` : ''}\n\nElaborate this phase per your instructions: verify assumptions, produce the task list, write tasks/*.md files, update the phase file and plan.md status.`,
+    `Plan directory: ${args.planDir}\nPhase id: ${p.id} (phases/${NN(p.id)}-${p.slug}.md)\nSpec: ${args.specPath}\nRepo root: ${args.repoRoot}\nWhat prior phases actually landed:\n${landed}${lessonsBlock()}${extraNote ? `\n\n${extraNote}` : ''}\n\nElaborate this phase per your instructions: verify assumptions, produce the task list, write tasks/*.md files, update the phase file and plan.md status. Bake the lessons above (if any) into task context and references so implementers cannot repeat those mistakes.`,
     { agentType: 'code-factory:dynamic-elaborator', effort: 'xhigh', schema: TASKS_SCHEMA, phase: `Phase ${p.id}: ${p.name}`, label: `elaborate:${p.id}` },
   )
 }
 
 function inFlightNote(p, tasks) {
-  return `LOOKAHEAD MODE: Phase ${p.id} (${p.name}) is being implemented RIGHT NOW — its files are mid-flight in the working tree; do not treat their current state as final. For what phase ${p.id} will produce, trust its task files (tasks/${NN(p.id)}-*.md) and its goal: ${p.goal} Verify only earlier phases' code against the tree. If your task list depends heavily on phase ${p.id}'s exact output shapes, say so in phaseNotes so the orchestrator knows re-elaboration is likely if that phase drifts.`
+  return `LOOKAHEAD MODE: Phase ${p.id} (${p.name}) is being implemented RIGHT NOW — its files are mid-flight in the working tree; do not treat their current state as final. For what phase ${p.id} will produce, trust its task files (tasks/${NN(p.id)}-*.md) and its goal: ${p.goal} Verify only earlier phases' code against the tree. If your task list depends heavily on phase ${p.id}'s exact output shapes, set needsReelaboration=true so the orchestrator re-elaborates against the stable tree before executing.`
 }
-
-const branchSetup = await agent(
-  `In ${args.repoRoot}: create and check out branch ${args.branch} from ${args.baseBranch} (fetch first; if the branch exists, check it out and report its state). Report what you did.`,
-  { model: 'haiku', effort: 'low', phase: 'Plan', label: 'branch-setup' },
-)
-if (!branchSetup) flags.push('Branch setup agent died — verify branch state')
 
 let lookahead = elaborate(plan.phases[0], null)
 for (let i = 0; i < plan.phases.length; i++) {
@@ -440,13 +552,22 @@ for (let i = 0; i < plan.phases.length; i++) {
   const next = plan.phases[i + 1]
   const label = `Phase ${p.id}: ${p.name}`
   phase(label)
-  const elaborated = await lookahead
+  retroSignals.length = 0
+  const flagsBefore = flags.length
+  let elaborated = await lookahead
+  if (elaborated && elaborated.needsReelaboration) {
+    log(`${label}: lookahead flagged dependency on in-flight work — re-elaborating against the stable tree`)
+    elaborated = await elaborate(p, `RE-ELABORATION: your earlier lookahead pass flagged that this phase depends on the prior phase's exact output. The tree is now stable. Re-verify every assumption and overwrite the stale task files.`)
+  }
   if (!elaborated || !elaborated.tasks || !elaborated.tasks.length) {
     flags.push(`${label}: elaboration failed or returned no tasks — phase skipped`)
     if (next) lookahead = elaborate(next, null)
     continue
   }
   if (elaborated.flags) flags.push(...elaborated.flags)
+  const riskyCount = elaborated.tasks.filter((t) => t.risk === 'high').length
+  log(`${label}: ${p.goal}`)
+  log(`${label}: ${elaborated.tasks.length} task(s)${riskyCount ? `, ${riskyCount} high-risk (dual review)` : ''}${elaborated.phaseNotes && elaborated.phaseNotes.length ? ` — ${firstSentence(elaborated.phaseNotes[0], 120)}` : ''}`)
 
   // Start the next phase's elaboration now — it runs while this phase implements.
   if (next) lookahead = elaborate(next, inFlightNote(p, elaborated.tasks))
@@ -454,13 +575,26 @@ for (let i = 0; i < plan.phases.length; i++) {
   await runPhaseTasks(elaborated.tasks, label)
 
   const extraVerify = elaborated.tasks.flatMap((t) => t.verify || [])
-  await boundary(label, [...plan.checks, ...extraVerify])
+  const green = await boundary(label, [...plan.checks, ...extraVerify])
+  boundaryResults.push({ phase: label, green })
 
+  // One phase-closing agent: reads the phase diff once and returns the landed
+  // summary, the drift verdict, and the distilled lessons together. (Splitting
+  // these meant two sequential agents reading the same diff at every boundary.)
+  // Lessons feed every later prompt; the next phase's lookahead elaboration
+  // predates them by design, but its implementers get them at dispatch time.
+  const newFlags = flags.slice(flagsBefore)
+  const hasSignals = retroSignals.length || newFlags.length
   const summ = await agent(
-    `In ${args.repoRoot} on branch ${args.branch}, review the git log/diff for the work just completed ("${p.name}"). 1) summary: ≤120 words of plain prose on what actually landed — files created/modified, key interfaces. 2) substantialDrift: true ONLY if files, interfaces, or contracts that LATER phases build on ended up different from the planned tasks below (renames, moved modules, changed signatures, dropped tasks). Routine fixes and internal details are not drift.\nPlanned tasks:\n${elaborated.tasks.map((t) => `- ${t.title} → ${t.files.join(', ')}`).join('\n')}`,
-    { model: 'haiku', effort: 'low', schema: SUMMARY_SCHEMA, phase: label, label: `summary:${p.id}` },
+    `In ${args.repoRoot} on branch ${args.branch}, review the git log/diff for the work just completed ("${p.name}") and close out the phase.\n\nPlanned tasks:\n${elaborated.tasks.map((t) => `- ${t.title} → ${t.files.join(', ')}`).join('\n')}\n\nReturn:\n1. summary: ≤120 words of plain prose on what actually landed — files created/modified, key interfaces.\n2. substantialDrift: true ONLY if files, interfaces, or contracts that LATER phases build on ended up different from the planned tasks above (renames, moved modules, changed signatures, dropped tasks). Routine fixes and internal details are not drift. Set driftNotes when true.${next && hasSignals ? `\n3. lessons: this phase's correction signals are below. Distill ONLY systemic, forward-applicable lessons — recurring coding-style/standards/convention violations or misused APIs that FUTURE tasks in this plan are likely to repeat. One-off bugs are not lessons; an empty list is a fine answer. Max 3, each a single imperative line an implementer can follow ("Use the shared X helper for Y", "Never Z"). Do NOT repeat or rephrase lessons already in force.\n\nCorrection signals:\n${retroSignals.map((s) => `- ${s}`).join('\n')}\n${newFlags.map((f) => `- flag: ${f}`).join('\n')}\n\nLessons already in force:\n${lessons.map((l) => `- ${l}`).join('\n') || '- none'}\n\nFor each NEW lesson that is really a standing project convention the preface should have stated, append it to ${args.planDir}preface.md under a "## Learned during execution" section (create the section if missing). Append all new lessons, tagged with this phase's name, to ${args.planDir}lessons.md.` : '\n3. lessons: return an empty array.'}`,
+    { model: 'sonnet', effort: 'medium', schema: RETRO_SCHEMA, phase: label, label: `close:${p.id}` },
   )
   phaseSummaries.push(`Phase ${p.id} (${p.name}): ${summ ? summ.summary : p.goal}`)
+  log(`${label} ${green ? 'complete' : 'complete (checks not green)'} — ${firstSentence(summ && summ.summary, 200) || p.goal}`)
+  if (summ && summ.lessons && summ.lessons.length) {
+    lessons.push(...summ.lessons)
+    log(`${label}: learned — ${summ.lessons.join(' | ')}`)
+  }
 
   if (next && summ && summ.substantialDrift) {
     log(`${label}: substantial drift from plan — re-elaborating next phase`)
@@ -478,6 +612,7 @@ const pr = await agent(
 )
 const prUrl = pr ? pr.url : null
 if (!prUrl) flags.push('PR creation failed — branch is pushed or local; open PR manually')
+else log(`PR open: ${prUrl}`)
 
 log('Running final adversarial sweeps while CI runs')
 const sweepDefs = [
@@ -485,45 +620,51 @@ const sweepDefs = [
   { key: 'compliance', prompt: `Review the complete diff of branch ${args.branch} against ${args.baseBranch} in ${args.repoRoot}, against the spec at ${args.specPath}. For EVERY EARS requirement: locate the implementing code and the test that would catch its removal. Also verify non-goals were not built and constraints were not broken. Missing implementation or test coverage for a requirement is CRITICAL. Severity per finding, verdict PASS or ISSUES.` },
 ]
 const sweeps = await parallel(sweepDefs.map((s) => () => (async () => {
-  const viaCodex = await runCodex(REVIEW_DEEP_CODEX, 'read-only', s.prompt, { label: `sweep:${s.key}`, phase: 'Deliver' })
-  if (viaCodex) return { key: s.key, verdict: /ISSUES/.test(viaCodex.summary) ? 'ISSUES' : 'PASS', findings: [{ severity: 'MAJOR', summary: viaCodex.summary }] }
+  const viaCodex = await runCodexReview(REVIEW_DEEP_CODEX, s.prompt, { label: `sweep:${s.key}`, phase: 'Deliver' })
+  if (viaCodex) return { key: s.key, ...viaCodex }
   const r = await agent(s.prompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: 'xhigh', schema: REVIEW_SCHEMA, label: `sweep:${s.key}`, phase: 'Deliver' })
   return r ? { key: s.key, ...r } : null
 })()))
+sweepDefs.forEach((s, i) => { if (!sweeps[i]) flags.push(`Final ${s.key} sweep did not return — UNVERIFIED`) })
 const sweepFindings = sweeps.filter(Boolean).flatMap((s) => (s.verdict === 'ISSUES' ? s.findings.map((f) => ({ ...f, sweep: s.key })) : []))
 const actionable = sweepFindings.filter((f) => f.severity !== 'MINOR')
 sweepFindings.filter((f) => f.severity === 'MINOR').forEach((f) => flags.push(`Final sweep (${f.sweep}, minor): ${f.summary}`))
+if (!actionable.length) log(`Final sweeps: clean${sweepFindings.length ? ` (${sweepFindings.length} minor note(s))` : ''}`)
 if (actionable.length) {
-  log(`Final sweeps: ${actionable.length} actionable finding(s) — dispatching fixes`)
-  const p = `${preface}\n\nFinal review of the full branch diff surfaced these findings. Fix each or rebut with a precise reason. Commit in logical units and push.\n${actionable.map((f) => `- [${f.severity}] (${f.sweep}) ${f.file || ''} ${f.summary}`).join('\n')}\n\n${implRules.replace('exactly one commit for this task', 'one commit per logical fix')}`
+  log(`Final sweeps: fixing ${actionable.length} finding(s) — ${actionable.slice(0, 3).map((f) => `${f.sweep}: ${firstSentence(f.summary, 70)}`).join('; ')}`)
+  const p = `${preface}${lessonsBlock()}\n\nFinal review of the full branch diff surfaced these findings. You own every file named in a finding, plus any test file covering it. Fix each finding or rebut with a precise reason. Do not run build/test/lint/format/typecheck commands. No plan vocabulary in code, tests, or commit messages. One commit per logical fix — ${commitRule} Push when done.\n\nFindings:\n${actionable.map((f) => `- [${f.severity}] (${f.sweep}) ${f.file || ''} ${f.summary}`).join('\n')}`
   const r = await implement({ difficulty: 'average' }, p, { label: 'sweep-fixes', phase: 'Deliver' })
   if (!r || r.status === 'BLOCKED') flags.push(`Final sweep fixes incomplete: ${r ? r.summary : 'agent died'}`)
 }
 
 if (prUrl) {
-  for (let round = 1; round <= MAX_CI_ROUNDS; round++) {
+  for (let round = 1; ; round++) {
     const ci = await agent(
       `Watch CI for ${prUrl} from ${args.repoRoot} (gh pr checks ${prUrl} --watch; push the branch first if there are unpushed commits). When checks settle, report green=true/false. For failures, group them and report: check name as group name, key log output as summary, implicated files. Also read unresolved PR review comments from CI reviewer bots and include each as its own group. Do not fix anything.`,
       { model: 'sonnet', effort: 'medium', schema: CHECKS_SCHEMA, label: `ci:r${round}`, phase: 'Deliver' },
     )
-    if (!ci) { flags.push('CI watch agent died — check PR manually'); break }
-    if (ci.green) { log('CI green'); break }
-    if (round === MAX_CI_ROUNDS) {
+    if (!ci) { flags.push('CI watch agent died — CI status UNVERIFIED, check the PR manually'); break }
+    if (ci.green) { ciGreen = true; log('CI green'); break }
+    if (round > MAX_CI_ROUNDS) {
       flags.push(`CI not green after ${MAX_CI_ROUNDS} fix rounds: ${ci.groups.map((g) => g.name).join(', ')}`)
       break
     }
-    log(`CI round ${round}: ${ci.groups.length} failing group(s), dispatching fixers`)
+    log(`CI red — fixing ${ci.groups.length} group(s): ${ci.groups.map((g) => g.name).join(', ')}`)
     await parallel(ci.groups.map((g) => () => (async () => {
-      const p = `${preface}\n\nCI on PR ${prUrl} is failing. Fix this group at the root cause — no test deletion, no skips, no assertion weakening. You may run only the narrow commands needed to reproduce this failure locally. Commit and push.\nGroup: ${g.name}\nImplicated files: ${(g.files || []).join(', ')}\nFailure detail:\n${g.summary}`
+      const p = `${preface}${lessonsBlock()}\n\nCI on PR ${prUrl} is failing. Fix this group at the root cause — no test deletion, no skips, no assertion weakening. You may run only the narrow commands needed to reproduce this failure locally. ${commitRule} Then push.\nGroup: ${g.name}\nImplicated files: ${(g.files || []).join(', ')}\nFailure detail:\n${g.summary}`
       const r = await implement({ difficulty: 'average' }, p, { label: `ci-fix:${g.name}`, phase: 'Deliver' })
       if (!r || r.status === 'BLOCKED') flags.push(`CI fixer for "${g.name}" blocked: ${r ? r.summary : 'agent died'}`)
     })()))
   }
 }
 
+// Honest outcome: PR_OPEN is reserved for confirmed-green CI.
 return {
-  outcome: prUrl ? 'PR_OPEN' : 'NO_PR',
+  outcome: prUrl ? (ciGreen ? 'PR_OPEN' : 'PR_OPEN_WITH_FAILURES') : 'NO_PR',
   prUrl,
+  ciGreen,
+  boundaries: boundaryResults,
   phases: phaseSummaries,
+  lessons,
   flags,
 }

@@ -169,7 +169,7 @@ Once the user approves the draft, run one adversarial review before writing the 
 
 **When:** automatically for Medium and Large specs (per the Scaling Guide); for Small specs only if the user asks. Run it once per spec — re-run only if triage causes a major rewrite (new approach, new components), not for wording fixes.
 
-**How:** dispatch a Codex session via `mcp__codex__codex` with `sandbox: read-only`, `approval-policy: never`, model `sol`, `config: {"model_reasoning_effort": "xhigh"}`, `cwd` set to the repo root. If the Codex MCP is unavailable, fall back to a clean-context `adversarial-reviewer` subagent (Opus, high effort). Either way the reviewer gets **only** the draft spec and repo access — no drafting history, no rationale. The prompt:
+**How:** dispatch a Codex session via `mcp__codex__codex` with `sandbox: read-only`, `approval-policy: never`, model `gpt-5.6-sol`, `config: {"model_reasoning_effort": "xhigh"}`, `cwd` set to the repo root. If the Codex MCP is unavailable, fall back to a clean-context `adversarial-reviewer` subagent (Opus, high effort). Either way the reviewer gets **only** the draft spec and repo access — no drafting history, no rationale. The prompt:
 
 ```
 Adversarially review this design spec. Assume it is flawed; your job is to find how.
