@@ -14,6 +14,7 @@ Division of labor, by design:
 - **Reviews are adversarial and cross-model**, scaled by per-task risk: mechanical → none, standard → one Claude Opus reviewer, high → Opus + Codex independently. CI's specialized reviewers power the outer loop after the PR opens — there is no phase-boundary reviewer suite.
 - **Plans are granular files, elaborated one phase ahead.** The planner writes a small plan directory (tiny TOC, shared preface, per-phase sketches). Phase N+1's task files are written *while phase N implements* — after the first tasks start, execution almost never waits on planning. A cheap drift check at each boundary triggers re-elaboration only when review/boundary fixes substantially changed what later phases build on. No agent ever loads a plan dossier.
 - **Plan artifacts and throwaway code never reach the repo — enforced at the source.** The elaborator may only specify durable behavioral tests (there is no ephemeral-test concept); all one-off verification lives as `verify` commands in the plan, run once at the boundary and discarded with it. Implementers are forbidden from writing scaffolding tests, scratch code, or plan vocabulary (EARS ids, task/phase references) into code, tests, or commits. A mechanical hygiene scan opens every phase boundary as the deterministic backstop — so reviewers and CI never spend cycles on it.
+- **The run leaves a paper trail.** Each phase appends its summary, boundary result, and lessons to `<planDir>/progress.md` — written by the phase-closing agent that already reads the diff, so it costs nothing extra. Open it mid-run to see where things stand; it survives crashes and resumes, where the `/workflows` narration does not.
 - **The orchestrator learns across phases.** Every phase boundary ends with a retrospective: the workflow collects that phase's correction signals (review findings, failing check groups, flags), a retro agent distills the systemic ones into binding lessons, standing conventions get codified into `preface.md` ("Learned during execution"), and all lessons are injected into every subsequent implementer, reviewer, elaborator, and fixer prompt. A style mistake made in phase 2 is structurally harder to make in phase 3. Lessons are appended after the stable preface so prompt-cache prefixes survive, and logged to `<planDir>/lessons.md` for humans.
 - **Sessions are reused where independence doesn't matter.** Implementer Codex sessions continue across review-fix cycles and chain into dependent tasks touching the same files (context and provider cache carry over); reviewer re-checks after a fix are scoped to the prior findings rather than full re-reviews. Adversarial reviewers are never reused across tasks — a clean context per task is what makes them adversarial.
 
@@ -52,10 +53,10 @@ The first run returns `{ outcome: "AWAITING_APPROVAL", approvalDoc, phases, flag
 
 The workflow returns `{ outcome, prUrl, phases, flags }`.
 
-- **`PR_OPEN`** (CI confirmed green) — report the PR URL, the per-phase summaries, and every flag verbatim. Flags are the autonomous run's deferred questions: blocked tasks, unresolved review findings, Codex fallbacks. Don't bury them. Then invoke the `explain-diff-html` skill on the branch/PR diff to produce the walkthrough of the most important changes, and open it for the user alongside the PR URL.
+- **`PR_OPEN`** (CI confirmed green) — read `progressDoc` (`<planDir>/progress.md`) and `<planDir>/lessons.md`, then **lead with the narrative**: what got built, phase by phase, in plain prose. The PR URL and the flag list come after. Flags are the autonomous run's deferred questions — blocked tasks, unresolved review findings, escalated reviewer feedback, Codex fallbacks — so report every one verbatim rather than summarizing them away. Then invoke the `explain-diff-html` skill on the branch/PR diff and open the walkthrough alongside the PR URL.
 - **`PR_OPEN_WITH_FAILURES`** — the PR exists but CI is not confirmed green (see `ciGreen` and per-phase `boundaries` in the result). Report exactly which gates are red/unverified before anything else, then proceed as for PR_OPEN.
 - **`NEEDS_CONTEXT`** — the spec was too ambiguous to phase. Get answers from the user, then relaunch with `resumeFromRunId` plus `"clarifications": "<the answers>"` in args — the clarifications are interpolated into the planner's prompt, which invalidates exactly that cached call so planning re-runs with the answers. (Passing answers any other way replays the cached NEEDS_CONTEXT result forever.)
-- **`BRANCH_SETUP_FAILED`** — dirty working tree or checkout failure, caught before any tokens were spent on planning. Resolve the git state with the user, then relaunch fresh.
+A dirty working tree also returns `NEEDS_CONTEXT` — the planner checks it before exploring, so nothing expensive runs against a tree someone is mid-edit on.
 - **`FEEDBACK_FAILED`** — the user's conditional approval feedback could not be applied to the plan. Nothing was implemented. Show the detail, resolve with the user, relaunch with revised feedback.
 - **`NO_PR`** — implementation finished but PR creation failed. The branch exists locally/pushed; open the PR manually with `gh`, then report.
 - **Killed or died mid-run** — relaunch with the same `scriptPath` + `args` + `resumeFromRunId`; completed agent calls replay from cache and execution continues from the first incomplete step.
@@ -73,9 +74,21 @@ The model tables live in `workflow.js` (`MODELS`, `REVIEW_TASK_CODEX`, `REVIEW_D
 | plan review + final sweeps | gpt-5.6-sol, xhigh effort | opus, xhigh effort |
 | planner / elaborator (always Claude) | — | opus, xhigh effort |
 | boundary hygiene + running checks | — | haiku |
-| CI watch (reads bot review comments too) | — | sonnet |
+| CI watch, PR comment triage + replies | — | sonnet |
 
-Running verifications is mechanical — execute commands, capture exit codes — so it sits on the cheapest tier. The one piece of judgment there is grouping failures by root cause so parallel fixers don't collide on the same file; that instruction is explicit in the prompt. CI watch stays a tier up because it also interprets bot review comments.
+Running verifications is mechanical — execute commands, capture exit codes — so it sits on the cheapest tier. The one piece of judgment there is grouping failures by root cause so parallel fixers don't collide on the same file; that instruction is explicit in the prompt. CI watch and PR comment triage stay a tier up because they interpret free-form reviewer feedback.
+
+## Review feedback on the PR
+
+After CI settles, the Deliver phase reads reviewer feedback and triages each comment into **fix / reply / escalate** before acting:
+
+- **fix** — a real defect in this PR's diff. An implementer fixes it at the root cause, a 🤖-prefixed reply says what changed, the thread is resolved, and CI re-runs.
+- **reply** — a question, misunderstanding, or scope/preference request. Gets a real 🤖 answer citing code; the thread is left open for the reviewer to close. **No code changes** — a question is not a fix request.
+- **escalate** — feedback that invalidates the plan or needs an architectural decision. Becomes a flag for the user and a 🤖 reply saying it's been flagged; never silently "fixed."
+
+Bots are judged like any other reviewer — CodeRabbit, Copilot, Greptile and Bugbot are frequently out of scope, so the triage prompt says to judge the code rather than the confidence of the comment.
+
+**On why this polls:** GitHub has no push channel a local agent can subscribe to — the GraphQL schema has no Subscription type, no SSE/long-poll endpoint exists for comments, and the official GitHub MCP server deliberately advertises no subscribe capability. `gh pr checks --watch` streams *check runs* only, and it is not a proxy for bot completion (CodeRabbit and Copilot publish no check run at all). So the loop polls all three comment buckets — inline review threads, review submissions, and conversation comments — using conditional requests, which cost zero primary rate limit when they return 304. It sweeps a few times at ~90s intervals (GitHub's `X-Poll-Interval` floor is 60s) to catch bots that post minutes after CI goes green, then stops. For a long-running vigil beyond that, hand off to `babysit-pr`.
 
 Codex runs with `sandbox: danger-full-access` and `approval-policy: never` via the `codex-runner` agent — full permissions, no prompts. Every Codex call writes a run log (config, full prompt, verbatim final response, conversation id) to `<planDir>/runs/`, and the full inner transcript is in `~/.codex/sessions/` under that conversation id. If the Codex MCP fails twice, the whole run falls back to the Anthropic column and a flag records it. If the user's Codex model names differ, edit `MODELS` before launching.
 
