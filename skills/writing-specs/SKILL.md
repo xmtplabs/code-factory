@@ -19,6 +19,8 @@ digraph design_doc {
     "Write EARS requirements" [shape=box];
     "Present to user for review" [shape=box];
     "User approves?" [shape=diamond];
+    "Adversarial spec review" [shape=box];
+    "Triage findings" [shape=box];
     "Write to docs/plans/" [shape=box];
     "Done" [shape=doublecircle];
 
@@ -30,7 +32,11 @@ digraph design_doc {
     "Write EARS requirements" -> "Present to user for review";
     "Present to user for review" -> "User approves?";
     "User approves?" -> "Draft each section" [label="revise"];
-    "User approves?" -> "Write to docs/plans/" [label="yes"];
+    "User approves?" -> "Adversarial spec review" [label="yes, not yet reviewed"];
+    "User approves?" -> "Write to docs/plans/" [label="yes, already reviewed or small spec"];
+    "Adversarial spec review" -> "Triage findings";
+    "Triage findings" -> "Draft each section" [label="accepted findings"];
+    "Triage findings" -> "Write to docs/plans/" [label="clean"];
     "Write to docs/plans/" -> "Done";
 }
 ```
@@ -157,6 +163,32 @@ Each marker records both the question AND the assumption the spec proceeds with.
 - Each marker must be a specific, answerable question — not "needs more thought."
 - Each marker must include the assumed answer.
 
+## Adversarial Spec Review
+
+Once the user approves the draft, run one adversarial review before writing the final artifact — a different model family with a clean context, attacking the spec the way implementation will. Bugs found here cost sentences; the same bugs found during execution cost re-plans.
+
+**When:** automatically for Medium and Large specs (per the Scaling Guide); for Small specs only if the user asks. Run it once per spec — re-run only if triage causes a major rewrite (new approach, new components), not for wording fixes.
+
+**How:** dispatch a Codex session via `mcp__codex__codex` with `sandbox: read-only`, `approval-policy: never`, model `sol`, `config: {"model_reasoning_effort": "xhigh"}`, `cwd` set to the repo root. If the Codex MCP is unavailable, fall back to a clean-context `adversarial-reviewer` subagent (Opus, high effort). Either way the reviewer gets **only** the draft spec and repo access — no drafting history, no rationale. The prompt:
+
+```
+Adversarially review this design spec. Assume it is flawed; your job is to find how.
+Attack, in order:
+1. EARS requirements that are untestable, ambiguous, or use unmeasurable terms
+2. Goals with no covering requirement; requirements serving no goal
+3. Requirements that conflict with each other or with existing behavior in the
+   codebase (read the actual files in the impact area)
+4. Modified functionality with no CONTINUE-TO regression requirements
+5. Infeasibility: designs the current codebase can't support as described
+6. Missing edge-case categories: concurrency, dependency failure, error
+   recovery, boundaries, security
+7. Non-goals hiding work that is actually required for the goals to hold
+Report each finding: severity CRITICAL|MAJOR|MINOR, spec section, the specific
+defect, and what would go wrong downstream if unfixed. Verdict: PASS or ISSUES.
+```
+
+**Triage:** present findings to the user with your recommended disposition for each — *accept & fix* (with proposed edit), *reject* (with reason), or *your call* — the same interaction pattern as clarification markers. Integrate accepted fixes immediately; cap at 2 review cycles, then proceed with remaining findings noted in the spec's Context section. In autonomous mode (coder-task), skip user triage: apply CRITICAL and MAJOR accepted-disposition fixes directly, post the findings summary as a GitHub issue comment, and proceed.
+
 ## Scaling Guide
 
 | Section | Small (~150w) | Medium (~400w) | Large (~800w) |
@@ -179,6 +211,8 @@ Each marker records both the question AND the assumption the spec proceeds with.
 | No context links | Link the catalyst — future readers need the WHY |
 | Modifying code with no regression plan | List preserved behaviors, cite existing tests, or require new regression tests first |
 | Modifying brownfield code without gap analysis | Enumerate existing modules, interfaces, and tests in the impact area before designing |
+| Skipping adversarial review because the user already approved | Approval gates intent; the adversarial pass gates testability and feasibility. Run it for Medium/Large specs. |
+| Giving the adversarial reviewer the drafting context | Clean context is the point — it gets the spec and the repo, nothing else |
 
 ## Examples
 

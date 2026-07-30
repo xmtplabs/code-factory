@@ -17,6 +17,14 @@ For autonomous work via GitHub issues:
 GitHub issue → coder-task → classify (bug/feature) → spec → decompose → execute → PR
 ```
 
+Experimental fast path (interactive use):
+
+```
+Approved spec → execute-dynamic-workflow → PR with green CI
+```
+
+**execute-dynamic-workflow** runs the whole implementation as one dynamic workflow: a planner writes a granular plan directory, each phase's tasks are elaborated one step ahead of execution, difficulty-matched Codex/Claude implementers write code and tests without running checks, cross-model adversarial reviewers gate risky tasks, the full check suite runs at phase boundaries as a grouped fix queue, and CI plus final adversarial sweeps close the loop. It is the experimental alternative to decomposing-specs + executing-plans, which remain the stable path (and power coder-task). writing-specs now also runs an adversarial spec review (Codex, clean context) before the final artifact is written.
+
 1. **writing-specs** — Collaborate with the user to produce a design spec with EARS requirements. This is the human checkpoint — the user reviews and approves the spec before anything gets built.
 2. **decomposing-specs** — Autonomously dispatches a `decomposer` subagent that explores the codebase and writes a multi-file plan: `plan.md` (TOC + coverage matrix), `standards.md` (one-time codebase context shared across phases), and per-phase files. Phase 1 + Verification ship fully elaborated; intermediate phases as sketches. Scoped plan-reviewer and task-list-reviewer validate the elaborated portion before hand-off.
 3. **executing-plans** — Orchestrates implementation. Loads `plan.md` + `standards.md` only; reads phase files on demand. At phase boundaries, dispatches `phase-elaborator` to flesh out sketched phases against the current codebase, with one-phase-ahead elaboration allowed during Tier B/C review and adjusted afterward if review fixes materially change the prior phase. Then dispatches implementer subagents (with batching for cohesive consecutive tasks, parallel for `[P]` tasks). Phase-boundary review depth scales to phase size; severity-gated re-review prevents ping-pong. Runs CI checks, final full-spec review, and auto-debug escalation if remediation fails.
