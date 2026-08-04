@@ -8,6 +8,21 @@ export const meta = {
   ],
 }
 
+// ============================== Args guard ==============================
+// `args` is injected by the Workflow runtime. When that injection does not
+// happen, every interpolation silently becomes the string "undefined" and the
+// planner is dispatched with a prompt reading "Spec path: undefined" — tens of
+// thousands of tokens burned before an agent notices. Fail here instead, in
+// milliseconds, naming exactly what is wrong.
+const REQUIRED_ARGS = ['specPath', 'planDir', 'repoRoot', 'baseBranch', 'branch', 'prTitle']
+if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+  throw new Error(`execute-dynamic-workflow: \`args\` is ${Array.isArray(args) ? 'an array' : typeof args} — expected an object. The caller must pass args as a JSON object (not a JSON-encoded string), with: ${REQUIRED_ARGS.join(', ')}.`)
+}
+const badArgs = REQUIRED_ARGS.filter((k) => typeof args[k] !== 'string' || !args[k].trim() || args[k].trim() === 'undefined')
+if (badArgs.length) {
+  throw new Error(`execute-dynamic-workflow: missing or invalid required args: ${badArgs.join(', ')}. Each must be a non-empty string. The caller must pass args as a JSON object (not a JSON-encoded string) with all of: ${REQUIRED_ARGS.join(', ')}.`)
+}
+
 // ============================== Configuration ==============================
 // Model map per task difficulty. Codex names must match the Codex account's
 // model strings; effort maps to model_reasoning_effort. Anthropic side is the
@@ -24,6 +39,14 @@ const MODELS = {
 // Plan review and final sweeps guard the entire run — XHigh.
 const REVIEW_TASK_CODEX = { model: 'gpt-5.6-sol', effort: 'high' }   // cross-model 2nd reviewer on risk=high tasks
 const REVIEW_DEEP_CODEX = { model: 'gpt-5.6-sol', effort: 'xhigh' }  // plan review + final sweeps
+// Effort for the Anthropic-side deep-thinking roles (planner, plan review,
+// plan fixes, elaboration, final sweeps). 'xhigh' is only accepted when
+// thinking is enabled on the session's model — otherwise the API rejects the
+// call with 400 "output_config.effort 'xhigh' is not supported when thinking is
+// disabled on this model". 'high' is safe everywhere; raise it only when you
+// know every Anthropic model in the run has thinking enabled. This does NOT
+// apply to REVIEW_DEEP_CODEX, which routes through the Codex MCP.
+const DEEP_EFFORT = 'high'
 const MAX_FIX_CYCLES = 2      // per-task review→fix cycles
 const MAX_CHECK_ROUNDS = 3    // phase-boundary fix rounds (plus a final observation)
 const MAX_CI_ROUNDS = 3       // CI fix rounds (plus a final observation)
@@ -489,15 +512,27 @@ const approvalTask = `Finally, write the developer's approval briefing to ${appr
 log('Planning: branch setup, codebase exploration, plan directory')
 let plan = await agent(
   `Spec path: ${args.specPath}\nOutput directory: ${args.planDir}\nRepo root: ${args.repoRoot}\nBase branch: ${args.baseBranch}\nWork branch: ${args.branch}\n${args.clarifications ? `\nClarifications from the developer (answers to earlier questions — treat as authoritative):\n${args.clarifications}\n` : ''}\nFIRST, set up the branch: verify the working tree is clean (git status). If it is dirty, STOP — return status NEEDS_CONTEXT with a question naming the uncommitted files; do not plan. Otherwise fetch origin and create/check out ${args.branch} from ${args.baseBranch} (check it out if it already exists), then confirm you are on ${args.branch} before exploring.\n\nTHEN produce the plan directory per your instructions (plan.md, preface.md, phases/*.md, empty tasks/).\n\n${approvalTask}\n\nReturn the structured summary. If the spec is too ambiguous to phase, return NEEDS_CONTEXT with questions.`,
-  { agentType: 'code-factory:workflow-planner', effort: 'xhigh', schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner' },
+  { agentType: 'code-factory:workflow-planner', effort: DEEP_EFFORT, schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner' },
 )
 const planIncomplete = (p) => !p || p.status !== 'DONE' || !p.preface || !p.phases || !p.phases.length || !p.checks || !p.checks.length
 if (planIncomplete(plan)) {
-  return {
-    outcome: 'NEEDS_CONTEXT',
-    questions: plan && plan.questions && plan.questions.length ? plan.questions : ['planner returned no usable plan — check the spec, the working tree state, and planner output'],
-    flags,
+  // Two very different failures used to collapse into NEEDS_CONTEXT. Only a
+  // planner that RAN and asked real questions means the spec was ambiguous —
+  // that one is fixed with args.clarifications. A planner that died, returned
+  // nothing, or came back malformed is a run failure: clarifications cannot
+  // fix it, so it gets its own outcome and points at the transcript.
+  const askedQuestions = plan && plan.status === 'NEEDS_CONTEXT' && plan.questions && plan.questions.length
+  if (!askedQuestions) {
+    return {
+      outcome: 'PLANNER_FAILED',
+      detail: !plan
+        ? 'planner agent returned nothing (died, errored, or was rejected by the API before producing output)'
+        : `planner returned an unusable plan (status=${plan.status || 'none'}, phases=${plan.phases ? plan.phases.length : 0}, checks=${plan.checks ? plan.checks.length : 0}, preface=${plan.preface ? 'present' : 'missing'})`,
+      planDir: args.planDir,
+      flags,
+    }
   }
+  return { outcome: 'NEEDS_CONTEXT', questions: plan.questions, flags }
 }
 preface = plan.preface
 if (plan.flags) flags.push(...plan.flags)
@@ -505,13 +540,13 @@ if (plan.flags) flags.push(...plan.flags)
 for (let cycle = 1; cycle <= MAX_PLAN_REVIEW_CYCLES; cycle++) {
   const planReviewPrompt = `Adversarially review the work plan in ${args.planDir} against the spec at ${args.specPath}. Assume the plan is wrong; attack: EARS requirements missing from the coverage matrix or double-assigned; phase seams that leave work unowned or owned twice; dependency errors between phases; phases that cannot be verified by the Checks commands; codebase claims that contradict the actual repo (read the files). Severity CRITICAL|MAJOR|MINOR per finding; verdict PASS or ISSUES (MINOR-only is PASS).`
   let review = await runCodexReview(REVIEW_DEEP_CODEX, planReviewPrompt, { label: 'plan-review', phase: 'Plan' })
-  if (!review) review = await agent(planReviewPrompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: 'xhigh', schema: REVIEW_SCHEMA, label: 'plan-review', phase: 'Plan' })
+  if (!review) review = await agent(planReviewPrompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: DEEP_EFFORT, schema: REVIEW_SCHEMA, label: 'plan-review', phase: 'Plan' })
   if (!review) { flags.push('Plan review gate UNVERIFIED — reviewer agents failed'); break }
   if (review.verdict === 'PASS') break
   log(`Plan review found issues (cycle ${cycle}) — dispatching planner fixes`)
   const fixed = await agent(
     `Fix mode. Plan directory: ${args.planDir}. Spec: ${args.specPath}. Apply these adversarial review findings (or rebut with reasons):\n${review.findings.map((f) => `- [${f.severity}] ${f.summary}`).join('\n')}\nThen refresh ${approvalDoc} so the briefing matches the corrected plan.\nReturn the updated structured summary.`,
-    { agentType: 'code-factory:workflow-planner', effort: 'xhigh', schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-fix' },
+    { agentType: 'code-factory:workflow-planner', effort: DEEP_EFFORT, schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-fix' },
   )
   if (!planIncomplete(fixed)) { plan = fixed; preface = plan.preface }
   if (cycle === MAX_PLAN_REVIEW_CYCLES) flags.push('Plan review issues may remain after max fix cycles')
@@ -536,7 +571,7 @@ if (args.feedback) {
   log('Applying plan feedback before implementation')
   const revised = await agent(
     `Fix mode. Plan directory: ${args.planDir}. Spec: ${args.specPath}. The developer reviewed the plan and gave this feedback — apply it (update plan.md / preface.md / phase sketches as needed), refresh ${approvalDoc} to match, and return the updated structured summary:\n${args.feedback}`,
-    { agentType: 'code-factory:workflow-planner', effort: 'xhigh', schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-feedback' },
+    { agentType: 'code-factory:workflow-planner', effort: DEEP_EFFORT, schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-feedback' },
   )
   if (planIncomplete(revised)) {
     // The user's approval was conditional on this feedback. Proceeding with
@@ -558,7 +593,7 @@ function elaborate(p, extraNote) {
   const landed = phaseSummaries.map((s) => `- ${s}`).join('\n') || '- nothing yet (first phase)'
   return agent(
     `Plan directory: ${args.planDir}\nPhase id: ${p.id} (phases/${NN(p.id)}-${p.slug}.md)\nSpec: ${args.specPath}\nRepo root: ${args.repoRoot}\nWhat prior phases actually landed:\n${landed}${lessonsBlock()}${extraNote ? `\n\n${extraNote}` : ''}\n\nElaborate this phase per your instructions: verify assumptions, produce the task list, write tasks/*.md files, update the phase file and plan.md status. Bake the lessons above (if any) into task context and references so implementers cannot repeat those mistakes.`,
-    { agentType: 'code-factory:dynamic-elaborator', effort: 'xhigh', schema: TASKS_SCHEMA, phase: `Phase ${p.id}: ${p.name}`, label: `elaborate:${p.id}` },
+    { agentType: 'code-factory:dynamic-elaborator', effort: DEEP_EFFORT, schema: TASKS_SCHEMA, phase: `Phase ${p.id}: ${p.name}`, label: `elaborate:${p.id}` },
   )
 }
 
@@ -642,7 +677,7 @@ const sweepDefs = [
 const sweeps = await parallel(sweepDefs.map((s) => () => (async () => {
   const viaCodex = await runCodexReview(REVIEW_DEEP_CODEX, s.prompt, { label: `sweep:${s.key}`, phase: 'Deliver' })
   if (viaCodex) return { key: s.key, ...viaCodex }
-  const r = await agent(s.prompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: 'xhigh', schema: REVIEW_SCHEMA, label: `sweep:${s.key}`, phase: 'Deliver' })
+  const r = await agent(s.prompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: DEEP_EFFORT, schema: REVIEW_SCHEMA, label: `sweep:${s.key}`, phase: 'Deliver' })
   return r ? { key: s.key, ...r } : null
 })()))
 sweepDefs.forEach((s, i) => { if (!sweeps[i]) flags.push(`Final ${s.key} sweep did not return — UNVERIFIED`) })
