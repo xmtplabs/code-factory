@@ -9,19 +9,41 @@ export const meta = {
 }
 
 // ============================== Args guard ==============================
-// `args` is injected by the Workflow runtime. When that injection does not
-// happen, every interpolation silently becomes the string "undefined" and the
-// planner is dispatched with a prompt reading "Spec path: undefined" — tens of
-// thousands of tokens burned before an agent notices. Fail here instead, in
-// milliseconds, naming exactly what is wrong.
+// `args` is injected by the Workflow runtime. Two things go wrong in practice:
+//
+// 1. Injection does not happen at all, and every interpolation silently becomes
+//    the string "undefined" — the planner is dispatched with a prompt reading
+//    "Spec path: undefined" and tens of thousands of tokens burn before an
+//    agent notices. Fail here instead, in milliseconds, naming what is wrong.
+// 2. The object arrives JSON-encoded as a string. It carries exactly the
+//    information we need, so parse it rather than rejecting the run: a caller
+//    who supplied every value correctly should not be turned away over an
+//    encoding detail they do not control.
 const REQUIRED_ARGS = ['specPath', 'planDir', 'repoRoot', 'baseBranch', 'branch', 'prTitle']
-if (typeof args !== 'object' || args === null || Array.isArray(args)) {
-  throw new Error(`execute-dynamic-workflow: \`args\` is ${Array.isArray(args) ? 'an array' : typeof args} — expected an object. The caller must pass args as a JSON object (not a JSON-encoded string), with: ${REQUIRED_ARGS.join(', ')}.`)
+
+function normalizeArgs(raw) {
+  if (typeof raw === 'string') {
+    const text = raw.trim()
+    if (!text) throw new Error('execute-dynamic-workflow: `args` is an empty string.')
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch (e) {
+      throw new Error(`execute-dynamic-workflow: \`args\` is a string that is not valid JSON (${e.message}). Pass args as a JSON object with: ${REQUIRED_ARGS.join(', ')}.`)
+    }
+    return normalizeArgs(parsed)
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`execute-dynamic-workflow: \`args\` is ${raw === null ? 'null' : Array.isArray(raw) ? 'an array' : typeof raw} — expected an object with: ${REQUIRED_ARGS.join(', ')}.`)
+  }
+  const bad = REQUIRED_ARGS.filter((k) => typeof raw[k] !== 'string' || !raw[k].trim() || raw[k].trim() === 'undefined')
+  if (bad.length) {
+    throw new Error(`execute-dynamic-workflow: missing or invalid required args: ${bad.join(', ')}. Each must be a non-empty string. Pass args as a JSON object with all of: ${REQUIRED_ARGS.join(', ')}.`)
+  }
+  return raw
 }
-const badArgs = REQUIRED_ARGS.filter((k) => typeof args[k] !== 'string' || !args[k].trim() || args[k].trim() === 'undefined')
-if (badArgs.length) {
-  throw new Error(`execute-dynamic-workflow: missing or invalid required args: ${badArgs.join(', ')}. Each must be a non-empty string. The caller must pass args as a JSON object (not a JSON-encoded string) with all of: ${REQUIRED_ARGS.join(', ')}.`)
-}
+
+const ARGS = normalizeArgs(typeof args === 'undefined' ? undefined : args)
 
 // ============================== Configuration ==============================
 // Model map per task difficulty. Codex names must match the Codex account's
@@ -247,7 +269,7 @@ function codexBriefing(m, sandbox, prompt, continueId, label) {
   const logName = (label || 'codex').replace(/[^a-zA-Z0-9._-]/g, '_')
   return [
     `CODEX_MODEL: ${m.model}`, `EFFORT: ${m.effort}`, `SANDBOX: ${sandbox}`,
-    `CWD: ${args.repoRoot}`, `LOG: ${args.planDir}runs/${logName}.md`,
+    `CWD: ${ARGS.repoRoot}`, `LOG: ${ARGS.planDir}runs/${logName}.md`,
     `CONTINUE: ${continueId || 'new'}`, 'PROMPT:', prompt,
   ].join('\n')
 }
@@ -293,7 +315,7 @@ async function implement(task, prompt, opts, continueId) {
   const m = MODELS[task.difficulty] || MODELS.average
   const viaCodex = await runCodex(m.codex, 'danger-full-access', prompt, opts, continueId)
   if (viaCodex) return { engine: 'codex', ...viaCodex }
-  const r = await agent(`${prompt}\n\nWork in ${args.repoRoot}.`, {
+  const r = await agent(`${prompt}\n\nWork in ${ARGS.repoRoot}.`, {
     model: m.anthropic.model, effort: m.anthropic.effort, schema: RUNNER_SCHEMA, ...opts,
   })
   return r ? { engine: 'anthropic', ...r } : null
@@ -352,7 +374,7 @@ async function runTask(task, phaseLabel) {
     }
   }
   const prompt = chainId
-    ? `${taskBlock(task)}${lessonsBlock()}\n\n(Conventions: ${args.planDir}preface.md — consult only if needed.)\n\n${implRules}`
+    ? `${taskBlock(task)}${lessonsBlock()}\n\n(Conventions: ${ARGS.planDir}preface.md — consult only if needed.)\n\n${implRules}`
     : `${preface}${lessonsBlock()}\n\n${taskBlock(task)}\n\n${implRules}`
   let impl = await implement(task, prompt, { label: `impl:${task.id}`, phase: phaseLabel }, chainId)
   if (!recordResult(task, impl)) return 'FAILED'
@@ -469,7 +491,7 @@ async function boundary(phaseLabel, checks) {
   // check runner would make every later round re-read instructions it can't
   // act on. Mechanical work — cheap model.
   const hygieneResult = await agent(
-    `Hygiene pass on this phase's diff in ${args.repoRoot} (git diff against the commit where the phase started, or the phase's commits):\n1. Plan-vocabulary scan: grep the changed files for plan structure leaking into code — requirement ids (REQ-, EARS, or the spec's id scheme), phase/task/cycle references ("Phase 2", "Task 3.1", "Cycle B", "satisfies requirement"). Strip or rename every hit so the code reads as if the plan never existed.\n2. Scaffolding-test scan: in changed test files, delete tests that assert file existence, symbol names, module structure, empty stubs, or that a mock returns its configured value — unless deletion would leave a spec requirement without behavioral coverage, in which case rewrite as a behavioral test.${ephemeralTests.length ? `\n3. Remove these implementer-reported temporary artifacts: ${ephemeralTests.join('; ')}.` : ''}\nDo not run build/test/lint commands. Commit if any files changed (${commitRule}) Report what you stripped, or "clean".`,
+    `Hygiene pass on this phase's diff in ${ARGS.repoRoot} (git diff against the commit where the phase started, or the phase's commits):\n1. Plan-vocabulary scan: grep the changed files for plan structure leaking into code — requirement ids (REQ-, EARS, or the spec's id scheme), phase/task/cycle references ("Phase 2", "Task 3.1", "Cycle B", "satisfies requirement"). Strip or rename every hit so the code reads as if the plan never existed.\n2. Scaffolding-test scan: in changed test files, delete tests that assert file existence, symbol names, module structure, empty stubs, or that a mock returns its configured value — unless deletion would leave a spec requirement without behavioral coverage, in which case rewrite as a behavioral test.${ephemeralTests.length ? `\n3. Remove these implementer-reported temporary artifacts: ${ephemeralTests.join('; ')}.` : ''}\nDo not run build/test/lint commands. Commit if any files changed (${commitRule}) Report what you stripped, or "clean".`,
     { model: 'haiku', effort: 'medium', phase: phaseLabel, label: 'hygiene' },
   )
   if (hygieneResult) ephemeralTests.length = 0 // cleared only after hygiene actually ran
@@ -479,7 +501,7 @@ async function boundary(phaseLabel, checks) {
     // in grouping failures so parallel fixers don't collide on the same file.
     // Haiku handles both here because the plan's check commands are explicit.
     const check = await agent(
-      `Run the full check suite from ${args.repoRoot}, in order:\n${checks.map((c) => `- ${c}`).join('\n')}\nRun every command even if an earlier one fails. Capture failures verbatim. Then group them so independent fixers can work in parallel WITHOUT touching the same files: failures sharing a root cause (e.g. dozens of type errors from one changed signature) are ONE group; failures in different packages/subsystems are separate groups. For each group report: name, failing commands, implicated files, and a summary with the key error output. Fix nothing. green=true only if every command passed.`,
+      `Run the full check suite from ${ARGS.repoRoot}, in order:\n${checks.map((c) => `- ${c}`).join('\n')}\nRun every command even if an earlier one fails. Capture failures verbatim. Then group them so independent fixers can work in parallel WITHOUT touching the same files: failures sharing a root cause (e.g. dozens of type errors from one changed signature) are ONE group; failures in different packages/subsystems are separate groups. For each group report: name, failing commands, implicated files, and a summary with the key error output. Fix nothing. green=true only if every command passed.`,
       { model: 'haiku', effort: 'medium', schema: CHECKS_SCHEMA, label: `checks:r${round}`, phase: phaseLabel },
     )
     if (!check) { flags.push(`${phaseLabel}: check agent died — checks UNVERIFIED`); return false }
@@ -506,19 +528,19 @@ phase('Plan')
 // tree aborts before expensive exploration), writes the plan directory, and
 // writes the human approval briefing from the plan it just built — no second
 // agent re-reading the same files to describe them.
-const approvalDoc = `${args.planDir}approval.md`
-const approvalTask = `Finally, write the developer's approval briefing to ${approvalDoc} (clean, scannable markdown — headers, tables, short bullets, no filler):\n1. High-level summary: what will be built, on branch ${args.branch} → PR "${args.prTitle}".\n2. Per phase in order: name, goal, EARS requirements covered, and the 3-5 MOST IMPORTANT verifications that will prove the phase worked at its boundary. Synthesize these from the phase goal, the Checks commands, and the spec's acceptance criteria — each concrete and checkable; "all tests pass" is banned.\n3. The full check suite that runs at every boundary.\n4. Assumptions you made and anything you flagged.`
+const approvalDoc = `${ARGS.planDir}approval.md`
+const approvalTask = `Finally, write the developer's approval briefing to ${approvalDoc} (clean, scannable markdown — headers, tables, short bullets, no filler):\n1. High-level summary: what will be built, on branch ${ARGS.branch} → PR "${ARGS.prTitle}".\n2. Per phase in order: name, goal, EARS requirements covered, and the 3-5 MOST IMPORTANT verifications that will prove the phase worked at its boundary. Synthesize these from the phase goal, the Checks commands, and the spec's acceptance criteria — each concrete and checkable; "all tests pass" is banned.\n3. The full check suite that runs at every boundary.\n4. Assumptions you made and anything you flagged.`
 
 log('Planning: branch setup, codebase exploration, plan directory')
 let plan = await agent(
-  `Spec path: ${args.specPath}\nOutput directory: ${args.planDir}\nRepo root: ${args.repoRoot}\nBase branch: ${args.baseBranch}\nWork branch: ${args.branch}\n${args.clarifications ? `\nClarifications from the developer (answers to earlier questions — treat as authoritative):\n${args.clarifications}\n` : ''}\nFIRST, set up the branch: verify the working tree is clean (git status). If it is dirty, STOP — return status NEEDS_CONTEXT with a question naming the uncommitted files; do not plan. Otherwise fetch origin and create/check out ${args.branch} from ${args.baseBranch} (check it out if it already exists), then confirm you are on ${args.branch} before exploring.\n\nTHEN produce the plan directory per your instructions (plan.md, preface.md, phases/*.md, empty tasks/).\n\n${approvalTask}\n\nReturn the structured summary. If the spec is too ambiguous to phase, return NEEDS_CONTEXT with questions.`,
+  `Spec path: ${ARGS.specPath}\nOutput directory: ${ARGS.planDir}\nRepo root: ${ARGS.repoRoot}\nBase branch: ${ARGS.baseBranch}\nWork branch: ${ARGS.branch}\n${ARGS.clarifications ? `\nClarifications from the developer (answers to earlier questions — treat as authoritative):\n${ARGS.clarifications}\n` : ''}\nFIRST, set up the branch: verify the working tree is clean (git status). If it is dirty, STOP — return status NEEDS_CONTEXT with a question naming the uncommitted files; do not plan. Otherwise fetch origin and create/check out ${ARGS.branch} from ${ARGS.baseBranch} (check it out if it already exists), then confirm you are on ${ARGS.branch} before exploring.\n\nTHEN produce the plan directory per your instructions (plan.md, preface.md, phases/*.md, empty tasks/).\n\n${approvalTask}\n\nReturn the structured summary. If the spec is too ambiguous to phase, return NEEDS_CONTEXT with questions.`,
   { agentType: 'code-factory:workflow-planner', effort: DEEP_EFFORT, schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner' },
 )
 const planIncomplete = (p) => !p || p.status !== 'DONE' || !p.preface || !p.phases || !p.phases.length || !p.checks || !p.checks.length
 if (planIncomplete(plan)) {
   // Two very different failures used to collapse into NEEDS_CONTEXT. Only a
   // planner that RAN and asked real questions means the spec was ambiguous —
-  // that one is fixed with args.clarifications. A planner that died, returned
+  // that one is fixed with ARGS.clarifications. A planner that died, returned
   // nothing, or came back malformed is a run failure: clarifications cannot
   // fix it, so it gets its own outcome and points at the transcript.
   const askedQuestions = plan && plan.status === 'NEEDS_CONTEXT' && plan.questions && plan.questions.length
@@ -528,7 +550,7 @@ if (planIncomplete(plan)) {
       detail: !plan
         ? 'planner agent returned nothing (died, errored, or was rejected by the API before producing output)'
         : `planner returned an unusable plan (status=${plan.status || 'none'}, phases=${plan.phases ? plan.phases.length : 0}, checks=${plan.checks ? plan.checks.length : 0}, preface=${plan.preface ? 'present' : 'missing'})`,
-      planDir: args.planDir,
+      planDir: ARGS.planDir,
       flags,
     }
   }
@@ -538,14 +560,14 @@ preface = plan.preface
 if (plan.flags) flags.push(...plan.flags)
 
 for (let cycle = 1; cycle <= MAX_PLAN_REVIEW_CYCLES; cycle++) {
-  const planReviewPrompt = `Adversarially review the work plan in ${args.planDir} against the spec at ${args.specPath}. Assume the plan is wrong; attack: EARS requirements missing from the coverage matrix or double-assigned; phase seams that leave work unowned or owned twice; dependency errors between phases; phases that cannot be verified by the Checks commands; codebase claims that contradict the actual repo (read the files). Severity CRITICAL|MAJOR|MINOR per finding; verdict PASS or ISSUES (MINOR-only is PASS).`
+  const planReviewPrompt = `Adversarially review the work plan in ${ARGS.planDir} against the spec at ${ARGS.specPath}. Assume the plan is wrong; attack: EARS requirements missing from the coverage matrix or double-assigned; phase seams that leave work unowned or owned twice; dependency errors between phases; phases that cannot be verified by the Checks commands; codebase claims that contradict the actual repo (read the files). Severity CRITICAL|MAJOR|MINOR per finding; verdict PASS or ISSUES (MINOR-only is PASS).`
   let review = await runCodexReview(REVIEW_DEEP_CODEX, planReviewPrompt, { label: 'plan-review', phase: 'Plan' })
   if (!review) review = await agent(planReviewPrompt, { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: DEEP_EFFORT, schema: REVIEW_SCHEMA, label: 'plan-review', phase: 'Plan' })
   if (!review) { flags.push('Plan review gate UNVERIFIED — reviewer agents failed'); break }
   if (review.verdict === 'PASS') break
   log(`Plan review found issues (cycle ${cycle}) — dispatching planner fixes`)
   const fixed = await agent(
-    `Fix mode. Plan directory: ${args.planDir}. Spec: ${args.specPath}. Apply these adversarial review findings (or rebut with reasons):\n${review.findings.map((f) => `- [${f.severity}] ${f.summary}`).join('\n')}\nThen refresh ${approvalDoc} so the briefing matches the corrected plan.\nReturn the updated structured summary.`,
+    `Fix mode. Plan directory: ${ARGS.planDir}. Spec: ${ARGS.specPath}. Apply these adversarial review findings (or rebut with reasons):\n${review.findings.map((f) => `- [${f.severity}] ${f.summary}`).join('\n')}\nThen refresh ${approvalDoc} so the briefing matches the corrected plan.\nReturn the updated structured summary.`,
     { agentType: 'code-factory:workflow-planner', effort: DEEP_EFFORT, schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-fix' },
   )
   if (!planIncomplete(fixed)) { plan = fixed; preface = plan.preface }
@@ -554,29 +576,29 @@ for (let cycle = 1; cycle <= MAX_PLAN_REVIEW_CYCLES; cycle++) {
 log(`Plan ready: ${plan.phases.length} phases`)
 
 // ============================== Approval gate ==============================
-// The one human checkpoint. First launch (no args.approved) writes a markdown
+// The one human checkpoint. First launch (no ARGS.approved) writes a markdown
 // briefing and pauses. The relaunch with resumeFromRunId + approved:true
 // replays everything above from cache, applies feedback (if any), and runs
 // the rest fully autonomously.
-if (!args.approved) {
+if (!ARGS.approved) {
   return {
     outcome: 'AWAITING_APPROVAL',
     approvalDoc,
-    planDir: args.planDir,
+    planDir: ARGS.planDir,
     phases: plan.phases.map((p) => `${p.id}: ${p.name} — ${p.goal}`),
     flags,
   }
 }
-if (args.feedback) {
+if (ARGS.feedback) {
   log('Applying plan feedback before implementation')
   const revised = await agent(
-    `Fix mode. Plan directory: ${args.planDir}. Spec: ${args.specPath}. The developer reviewed the plan and gave this feedback — apply it (update plan.md / preface.md / phase sketches as needed), refresh ${approvalDoc} to match, and return the updated structured summary:\n${args.feedback}`,
+    `Fix mode. Plan directory: ${ARGS.planDir}. Spec: ${ARGS.specPath}. The developer reviewed the plan and gave this feedback — apply it (update plan.md / preface.md / phase sketches as needed), refresh ${approvalDoc} to match, and return the updated structured summary:\n${ARGS.feedback}`,
     { agentType: 'code-factory:workflow-planner', effort: DEEP_EFFORT, schema: PLAN_SCHEMA, phase: 'Plan', label: 'planner-feedback' },
   )
   if (planIncomplete(revised)) {
     // The user's approval was conditional on this feedback. Proceeding with
     // the unmodified plan would implement something they did not approve.
-    return { outcome: 'FEEDBACK_FAILED', detail: revised && revised.questions ? revised.questions.join('; ') : 'planner could not apply the feedback', planDir: args.planDir, flags }
+    return { outcome: 'FEEDBACK_FAILED', detail: revised && revised.questions ? revised.questions.join('; ') : 'planner could not apply the feedback', planDir: ARGS.planDir, flags }
   }
   plan = revised
   preface = plan.preface
@@ -592,7 +614,7 @@ const NN = (id) => String(id).padStart(2, '0')
 function elaborate(p, extraNote) {
   const landed = phaseSummaries.map((s) => `- ${s}`).join('\n') || '- nothing yet (first phase)'
   return agent(
-    `Plan directory: ${args.planDir}\nPhase id: ${p.id} (phases/${NN(p.id)}-${p.slug}.md)\nSpec: ${args.specPath}\nRepo root: ${args.repoRoot}\nWhat prior phases actually landed:\n${landed}${lessonsBlock()}${extraNote ? `\n\n${extraNote}` : ''}\n\nElaborate this phase per your instructions: verify assumptions, produce the task list, write tasks/*.md files, update the phase file and plan.md status. Bake the lessons above (if any) into task context and references so implementers cannot repeat those mistakes.`,
+    `Plan directory: ${ARGS.planDir}\nPhase id: ${p.id} (phases/${NN(p.id)}-${p.slug}.md)\nSpec: ${ARGS.specPath}\nRepo root: ${ARGS.repoRoot}\nWhat prior phases actually landed:\n${landed}${lessonsBlock()}${extraNote ? `\n\n${extraNote}` : ''}\n\nElaborate this phase per your instructions: verify assumptions, produce the task list, write tasks/*.md files, update the phase file and plan.md status. Bake the lessons above (if any) into task context and references so implementers cannot repeat those mistakes.`,
     { agentType: 'code-factory:dynamic-elaborator', effort: DEEP_EFFORT, schema: TASKS_SCHEMA, phase: `Phase ${p.id}: ${p.name}`, label: `elaborate:${p.id}` },
   )
 }
@@ -641,7 +663,7 @@ for (let i = 0; i < plan.phases.length; i++) {
   const newFlags = flags.slice(flagsBefore)
   const hasSignals = retroSignals.length || newFlags.length
   const summ = await agent(
-    `In ${args.repoRoot} on branch ${args.branch}, review the git log/diff for the work just completed ("${p.name}") and close out the phase.\n\nPlanned tasks:\n${elaborated.tasks.map((t) => `- ${t.title} → ${t.files.join(', ')}`).join('\n')}\n\nFirst, append a section to ${args.planDir}progress.md (create the file with an "# Progress" heading if missing): "## Phase ${p.id}: ${p.name}", your summary paragraph, the boundary check result (${green ? 'checks green' : 'CHECKS NOT GREEN'}), and any lessons you distill below. This file is the run's human-readable record — keep each phase's entry to a few lines.\n\nThen return:\n1. summary: ≤120 words of plain prose on what actually landed — files created/modified, key interfaces.\n2. substantialDrift: true ONLY if files, interfaces, or contracts that LATER phases build on ended up different from the planned tasks above (renames, moved modules, changed signatures, dropped tasks). Routine fixes and internal details are not drift. Set driftNotes when true.${next && hasSignals ? `\n3. lessons: this phase's correction signals are below. Distill ONLY systemic, forward-applicable lessons — recurring coding-style/standards/convention violations or misused APIs that FUTURE tasks in this plan are likely to repeat. One-off bugs are not lessons; an empty list is a fine answer. Max 3, each a single imperative line an implementer can follow ("Use the shared X helper for Y", "Never Z"). Do NOT repeat or rephrase lessons already in force.\n\nCorrection signals:\n${retroSignals.map((s) => `- ${s}`).join('\n')}\n${newFlags.map((f) => `- flag: ${f}`).join('\n')}\n\nLessons already in force:\n${lessons.map((l) => `- ${l}`).join('\n') || '- none'}\n\nFor each NEW lesson that is really a standing project convention the preface should have stated, append it to ${args.planDir}preface.md under a "## Learned during execution" section (create the section if missing). Append all new lessons, tagged with this phase's name, to ${args.planDir}lessons.md.` : '\n3. lessons: return an empty array.'}`,
+    `In ${ARGS.repoRoot} on branch ${ARGS.branch}, review the git log/diff for the work just completed ("${p.name}") and close out the phase.\n\nPlanned tasks:\n${elaborated.tasks.map((t) => `- ${t.title} → ${t.files.join(', ')}`).join('\n')}\n\nFirst, append a section to ${ARGS.planDir}progress.md (create the file with an "# Progress" heading if missing): "## Phase ${p.id}: ${p.name}", your summary paragraph, the boundary check result (${green ? 'checks green' : 'CHECKS NOT GREEN'}), and any lessons you distill below. This file is the run's human-readable record — keep each phase's entry to a few lines.\n\nThen return:\n1. summary: ≤120 words of plain prose on what actually landed — files created/modified, key interfaces.\n2. substantialDrift: true ONLY if files, interfaces, or contracts that LATER phases build on ended up different from the planned tasks above (renames, moved modules, changed signatures, dropped tasks). Routine fixes and internal details are not drift. Set driftNotes when true.${next && hasSignals ? `\n3. lessons: this phase's correction signals are below. Distill ONLY systemic, forward-applicable lessons — recurring coding-style/standards/convention violations or misused APIs that FUTURE tasks in this plan are likely to repeat. One-off bugs are not lessons; an empty list is a fine answer. Max 3, each a single imperative line an implementer can follow ("Use the shared X helper for Y", "Never Z"). Do NOT repeat or rephrase lessons already in force.\n\nCorrection signals:\n${retroSignals.map((s) => `- ${s}`).join('\n')}\n${newFlags.map((f) => `- flag: ${f}`).join('\n')}\n\nLessons already in force:\n${lessons.map((l) => `- ${l}`).join('\n') || '- none'}\n\nFor each NEW lesson that is really a standing project convention the preface should have stated, append it to ${ARGS.planDir}preface.md under a "## Learned during execution" section (create the section if missing). Append all new lessons, tagged with this phase's name, to ${ARGS.planDir}lessons.md.` : '\n3. lessons: return an empty array.'}`,
     { model: 'sonnet', effort: 'medium', schema: RETRO_SCHEMA, phase: label, label: `close:${p.id}` },
   )
   phaseSummaries.push(`Phase ${p.id} (${p.name}): ${summ ? summ.summary : p.goal}`)
@@ -662,7 +684,7 @@ for (let i = 0; i < plan.phases.length; i++) {
 phase('Deliver')
 log('Opening PR')
 const pr = await agent(
-  `In ${args.repoRoot} on branch ${args.branch}: push the branch and open a PR against ${args.baseBranch} titled ${JSON.stringify(args.prTitle)} using gh. PR body: short summary of the change, link to the spec at ${args.specPath}, and this note verbatim if any items exist — "Flagged for human attention:" followed by these items:\n${flags.map((f) => `- ${f}`).join('\n') || '(none)'}\nEnd the body with the standard Claude Code attribution. Return the PR URL.`,
+  `In ${ARGS.repoRoot} on branch ${ARGS.branch}: push the branch and open a PR against ${ARGS.baseBranch} titled ${JSON.stringify(ARGS.prTitle)} using gh. PR body: short summary of the change, link to the spec at ${ARGS.specPath}, and this note verbatim if any items exist — "Flagged for human attention:" followed by these items:\n${flags.map((f) => `- ${f}`).join('\n') || '(none)'}\nEnd the body with the standard Claude Code attribution. Return the PR URL.`,
   { model: 'sonnet', effort: 'low', schema: PR_SCHEMA, phase: 'Deliver', label: 'open-pr' },
 )
 const prUrl = pr ? pr.url : null
@@ -671,8 +693,8 @@ else log(`PR open: ${prUrl}`)
 
 log('Running final adversarial sweeps while CI runs')
 const sweepDefs = [
-  { key: 'quality', prompt: `Review the complete diff of branch ${args.branch} against ${args.baseBranch} in ${args.repoRoot}. Hunt: dead code, low-value or dishonest tests, duplicated logic that should merge, missing documentation where a maintainer needs it, poor naming, refactor opportunities that reduce net complexity. Anchor every finding to files. Severity CRITICAL|MAJOR|MINOR, verdict PASS or ISSUES.` },
-  { key: 'compliance', prompt: `Review the complete diff of branch ${args.branch} against ${args.baseBranch} in ${args.repoRoot}, against the spec at ${args.specPath}. For EVERY EARS requirement: locate the implementing code and the test that would catch its removal. Also verify non-goals were not built and constraints were not broken. Missing implementation or test coverage for a requirement is CRITICAL. Severity per finding, verdict PASS or ISSUES.` },
+  { key: 'quality', prompt: `Review the complete diff of branch ${ARGS.branch} against ${ARGS.baseBranch} in ${ARGS.repoRoot}. Hunt: dead code, low-value or dishonest tests, duplicated logic that should merge, missing documentation where a maintainer needs it, poor naming, refactor opportunities that reduce net complexity. Anchor every finding to files. Severity CRITICAL|MAJOR|MINOR, verdict PASS or ISSUES.` },
+  { key: 'compliance', prompt: `Review the complete diff of branch ${ARGS.branch} against ${ARGS.baseBranch} in ${ARGS.repoRoot}, against the spec at ${ARGS.specPath}. For EVERY EARS requirement: locate the implementing code and the test that would catch its removal. Also verify non-goals were not built and constraints were not broken. Missing implementation or test coverage for a requirement is CRITICAL. Severity per finding, verdict PASS or ISSUES.` },
 ]
 const sweeps = await parallel(sweepDefs.map((s) => () => (async () => {
   const viaCodex = await runCodexReview(REVIEW_DEEP_CODEX, s.prompt, { label: `sweep:${s.key}`, phase: 'Deliver' })
@@ -698,7 +720,7 @@ if (prUrl) {
   // triaging feedback against code that is about to change anyway.
   for (let round = 1; ; round++) {
     const ci = await agent(
-      `Watch CI for ${prUrl} from ${args.repoRoot} (gh pr checks ${prUrl} --watch; push the branch first if there are unpushed commits). When checks settle, report green=true/false. For failures, group them by root cause and report: check name as group name, key log output as summary, implicated files. Review comments are handled separately — ignore them here. Do not fix anything.`,
+      `Watch CI for ${prUrl} from ${ARGS.repoRoot} (gh pr checks ${prUrl} --watch; push the branch first if there are unpushed commits). When checks settle, report green=true/false. For failures, group them by root cause and report: check name as group name, key log output as summary, implicated files. Review comments are handled separately — ignore them here. Do not fix anything.`,
       { model: 'sonnet', effort: 'medium', schema: CHECKS_SCHEMA, label: `ci:r${round}`, phase: 'Deliver' },
     )
     if (!ci) { flags.push('CI watch agent died — CI status UNVERIFIED, check the PR manually'); break }
@@ -723,7 +745,7 @@ if (prUrl) {
   for (let round = 1; round <= PR_WATCH_ROUNDS; round++) {
     const seen = [...handledIds]
     const triage = await agent(
-      `Read review feedback on PR ${prUrl} from ${args.repoRoot} and triage it. Do not change any code.\n\nFetch all three buckets (they hold different things):\n- inline review threads via GraphQL reviewThreads — take each thread's id (PRRT_…), isResolved, and each comment's databaseId, author, path, body\n- review submissions: gh api repos/{owner}/{repo}/pulls/{n}/reviews (bodies of COMMENTED/CHANGES_REQUESTED submissions)\n- conversation comments: gh api repos/{owner}/{repo}/issues/{n}/comments\nUse conditional requests (If-None-Match/If-Modified-Since) where you can — a 304 costs no rate limit.\n\nSkip: resolved threads, anything authored by the PR author or a 🤖-prefixed reply, and these already-handled comment ids: ${seen.join(', ') || '(none)'}.\n\nFor each remaining comment classify disposition:\n- "fix" — a real defect, missing edge case, or security/correctness issue in this PR's diff\n- "reply" — a question, a misunderstanding, an already-handled point, or a preference/scope request that should NOT change this PR\n- "escalate" — feedback that invalidates the plan or spec, requires an architectural decision, or asks for work outside this PR's scope\nBots (CodeRabbit, Copilot, Greptile, Bugbot) are frequently wrong or out of scope — judge the code, not the confidence of the comment. Report id (numeric, for replies), threadId (PRRT_ node id when inline), author, isBot, path, body (trimmed to its substance), disposition, and a one-line rationale.\n\nIf there is no unhandled feedback, return an empty comments array.`,
+      `Read review feedback on PR ${prUrl} from ${ARGS.repoRoot} and triage it. Do not change any code.\n\nFetch all three buckets (they hold different things):\n- inline review threads via GraphQL reviewThreads — take each thread's id (PRRT_…), isResolved, and each comment's databaseId, author, path, body\n- review submissions: gh api repos/{owner}/{repo}/pulls/{n}/reviews (bodies of COMMENTED/CHANGES_REQUESTED submissions)\n- conversation comments: gh api repos/{owner}/{repo}/issues/{n}/comments\nUse conditional requests (If-None-Match/If-Modified-Since) where you can — a 304 costs no rate limit.\n\nSkip: resolved threads, anything authored by the PR author or a 🤖-prefixed reply, and these already-handled comment ids: ${seen.join(', ') || '(none)'}.\n\nFor each remaining comment classify disposition:\n- "fix" — a real defect, missing edge case, or security/correctness issue in this PR's diff\n- "reply" — a question, a misunderstanding, an already-handled point, or a preference/scope request that should NOT change this PR\n- "escalate" — feedback that invalidates the plan or spec, requires an architectural decision, or asks for work outside this PR's scope\nBots (CodeRabbit, Copilot, Greptile, Bugbot) are frequently wrong or out of scope — judge the code, not the confidence of the comment. Report id (numeric, for replies), threadId (PRRT_ node id when inline), author, isBot, path, body (trimmed to its substance), disposition, and a one-line rationale.\n\nIf there is no unhandled feedback, return an empty comments array.`,
       { model: 'sonnet', effort: 'medium', schema: COMMENTS_SCHEMA, label: `pr-comments:r${round}`, phase: 'Deliver' },
     )
     if (!triage) { flags.push('PR comment triage agent died — review feedback UNVERIFIED, check the PR manually'); break }
@@ -766,7 +788,7 @@ if (prUrl) {
     ]
     if (replyPlan.length) {
       const r = await agent(
-        `Post replies on PR ${prUrl} from ${args.repoRoot}. Every reply body MUST start with "🤖 ". Reply in the same place the comment lives: inline thread comments via gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies, review-submission and conversation comments via gh api repos/{owner}/{repo}/issues/{n}/comments.\n\n${replyPlan.map((c) => {
+        `Post replies on PR ${prUrl} from ${ARGS.repoRoot}. Every reply body MUST start with "🤖 ". Reply in the same place the comment lives: inline thread comments via gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies, review-submission and conversation comments via gh api repos/{owner}/{repo}/issues/{n}/comments.\n\n${replyPlan.map((c) => {
           const how = c.kind === 'fixed'
             ? 'Say specifically what changed and reference the fixing commit. Then resolve the thread (GraphQL resolveReviewThread) if threadId is present.'
             : c.kind === 'answer'
@@ -782,7 +804,7 @@ if (prUrl) {
     // Fixes were pushed: re-run CI once so the PR does not end red.
     if (toFix.length) {
       const ci = await agent(
-        `Watch CI for ${prUrl} from ${args.repoRoot} (push first if there are unpushed commits, then gh pr checks ${prUrl} --watch). Report green=true/false and group any failures by root cause with implicated files. Fix nothing.`,
+        `Watch CI for ${prUrl} from ${ARGS.repoRoot} (push first if there are unpushed commits, then gh pr checks ${prUrl} --watch). Report green=true/false and group any failures by root cause with implicated files. Fix nothing.`,
         { model: 'sonnet', effort: 'medium', schema: CHECKS_SCHEMA, label: `ci-recheck:r${round}`, phase: 'Deliver' },
       )
       if (ci && ci.green) { ciGreen = true; log('CI green after review fixes') }
@@ -797,7 +819,7 @@ return {
   outcome: prUrl ? (ciGreen ? 'PR_OPEN' : 'PR_OPEN_WITH_FAILURES') : 'NO_PR',
   prUrl,
   ciGreen,
-  progressDoc: `${args.planDir}progress.md`,
+  progressDoc: `${ARGS.planDir}progress.md`,
   boundaries: boundaryResults,
   phases: phaseSummaries,
   lessons,

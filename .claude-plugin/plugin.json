@@ -1,7 +1,7 @@
 {
   "name": "code-factory",
   "description": "Agent skills for structured software delivery: spec writing, issue creation, task decomposition, and implementation",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "author": {
     "name": "xmtplabs"
   },
