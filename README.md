@@ -53,14 +53,16 @@ Subagent contracts used by execute-dynamic-workflow (Claude Code):
 ### Claude Code
 
 ```bash
-claude plugin add xmtplabs/code-factory
+claude plugin marketplace add xmtplabs/code-factory
+claude plugin install code-factory@code-factory
 ```
 
 Or from a local clone:
 
 ```bash
 git clone https://github.com/xmtplabs/code-factory.git
-claude plugin add /path/to/code-factory
+claude plugin marketplace add /path/to/code-factory
+claude plugin install code-factory@code-factory
 ```
 
 ### Codex

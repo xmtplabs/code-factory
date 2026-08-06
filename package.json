@@ -1,0 +1,12 @@
+{
+  "name": "code-factory",
+  "version": "0.7.0",
+  "private": true,
+  "description": "Agent skills for dynamic software delivery — see README",
+  "scripts": {
+    "validate": "for s in skills/*/; do skills-ref validate \"$s\" || exit 1; done && echo 'all skills valid'"
+  },
+  "devDependencies": {
+    "skills-ref": "^0.1.5"
+  }
+}
