@@ -1,116 +1,81 @@
 ---
 name: execute-dynamic-workflow
-description: Use when you have an approved design spec and want it delivered autonomously as a PR with green CI. Runs a single dynamic workflow that plans, elaborates phases just-in-time, implements with difficulty-matched models, adversarially reviews cross-model, verifies at phase boundaries, and drives CI to green. Experimental alternative to decomposing-specs + executing-plans.
+description: Use when delivering a code change autonomously as a PR via a dynamic multi-agent workflow — from a full approved design spec down to a small well-scoped feature. Provides the workflow shape (plan, worktree-parallel implementation, adversarial review, phase-boundary verification) plus tested example scripts to run directly or copy for custom workflows.
 ---
 
 # Execute Dynamic Workflow
 
-Take a spec from `writing-specs` to an open PR with green CI in **one Workflow invocation**. The workflow has exactly one human checkpoint — plan approval, delivered as a markdown briefing before any code is written. After approval it is fully autonomous: it never stops to ask questions mid-run; anything needing human judgment is accumulated as a flag and surfaced at the end (and in the PR body). On completion, the user gets an HTML walkthrough of the most important changes via `/explain-diff-html`.
+Deliver code changes as PRs through dynamic workflows: expensive models plan, cheap models implement in parallel worktrees, adversarial reviewers attack the diffs, and verification runs at phase boundaries — not per task. This skill teaches the **shape** and ships **tested example scripts**. Run an example as-is when it fits; copy and edit one when the problem is suitably different. Do not re-derive the orchestration from scratch — the examples encode hard-won failure handling.
 
-Division of labor, by design:
+## The shape
 
-- **Expensive models plan** (planner + per-phase elaborator on high effort) so that **cheap models implement** — implementers get tasks so complete they never search or make architectural decisions, and spend their tokens on tool-call iterations instead.
-- **Implementers never run checks.** They write code and tests (tests are written, not run — the red test is the spec, the phase boundary is the proof). Build/test/lint/typecheck run once per phase boundary; failures become a grouped work queue for parallel fixers.
-- **Reviews are adversarial and cross-model**, scaled by per-task risk: mechanical → none, standard → one Claude Opus reviewer, high → Opus + Codex independently. CI's specialized reviewers power the outer loop after the PR opens — there is no phase-boundary reviewer suite.
-- **Plans are granular files, elaborated one phase ahead.** The planner writes a small plan directory (tiny TOC, shared preface, per-phase sketches). Phase N+1's task files are written *while phase N implements* — after the first tasks start, execution almost never waits on planning. A cheap drift check at each boundary triggers re-elaboration only when review/boundary fixes substantially changed what later phases build on. No agent ever loads a plan dossier.
-- **Plan artifacts and throwaway code never reach the repo — enforced at the source.** The elaborator may only specify durable behavioral tests (there is no ephemeral-test concept); all one-off verification lives as `verify` commands in the plan, run once at the boundary and discarded with it. Implementers are forbidden from writing scaffolding tests, scratch code, or plan vocabulary (EARS ids, task/phase references) into code, tests, or commits. A mechanical hygiene scan opens every phase boundary as the deterministic backstop — so reviewers and CI never spend cycles on it.
-- **The run leaves a paper trail.** Each phase appends its summary, boundary result, and lessons to `<planDir>/progress.md` — written by the phase-closing agent that already reads the diff, so it costs nothing extra. Open it mid-run to see where things stand; it survives crashes and resumes, where the `/workflows` narration does not.
-- **The orchestrator learns across phases.** Every phase boundary ends with a retrospective: the workflow collects that phase's correction signals (review findings, failing check groups, flags), a retro agent distills the systemic ones into binding lessons, standing conventions get codified into `preface.md` ("Learned during execution"), and all lessons are injected into every subsequent implementer, reviewer, elaborator, and fixer prompt. A style mistake made in phase 2 is structurally harder to make in phase 3. Lessons are appended after the stable preface so prompt-cache prefixes survive, and logged to `<planDir>/lessons.md` for humans.
-- **Sessions are reused where independence doesn't matter.** Implementer Codex sessions continue across review-fix cycles and chain into dependent tasks touching the same files (context and provider cache carry over); reviewer re-checks after a fix are scoped to the prior findings rather than full re-reviews. Adversarial reviewers are never reused across tasks — a clean context per task is what makes them adversarial.
+Every workflow here follows the same skeleton, whatever its size:
 
-## Step 1: Inputs and branch strategy
+1. **Plan with an expensive model, once.** A planner (or planner + JIT elaborator for multi-phase work) explores the codebase and produces small, granular plan files: a shared `preface.md` every prompt starts with (byte-identical → prompt-cache friendly), and per-task context so complete that implementers never search or make architectural decisions. Big work adds a human approval gate after planning; small work skips it.
+2. **Implement in parallel worktrees.** Every task gets its own git worktree on a short-lived `task/<id>` branch. Waves are bounded only by true dependencies — no file locks, no shared index. Implementers write code and durable behavioral tests but run nothing; the phase boundary is the proof.
+3. **Review adversarially, scaled by risk.** Mechanical tasks: no review. Standard: one clean-context adversarial reviewer. High-risk: two, cross-model (Claude + Codex via the `codex-mcp` skill). Reviewers are never reused across tasks and never fix their own findings. Fix cycle 1 continues the implementer's session; cycle 2 dispatches a **fresh** implementer on an escalated tier — a session that failed to fix once tends to repeat its misunderstanding.
+4. **Integrate, and clean up in the same step.** An integrator merges task branches into the work branch in dependency order, resolves conflicts (it has both diffs), and removes each worktree + branch as it lands. Worktrees never outlive their task — cleanup is part of integration's contract, not a separate phase someone can skip.
+5. **Verify at the boundary.** The full check suite runs once per phase (or once at the end for single-phase work), preceded by the deterministic hygiene gate (below). Failures become a grouped fix queue for parallel fixers. Then PR, CI to green, review-comment triage (fix / reply / escalate, 🤖-prefixed replies).
+6. **Never stop to ask.** Anything needing human judgment becomes a flag, surfaced at the end and in the PR body. Blocked ≠ ask; blocked = flag and continue what's unblocked.
 
-Required: path to an approved design spec (`docs/plans/YYYY-MM-DD-<topic>-design.md`).
+## Iron laws (enforced three ways)
 
-Decide the PR strategy with the user — this is the one interactive moment. Each PR gets its own run of this skill (one branch, one workflow). Err toward fewer, larger PRs; each must have a clear scope boundary and be independently mergeable. If splitting, agree on which spec sections/EARS requirements belong to each run and note the split in the workflow's `prTitle` and plan directory name. If the user already stated the strategy, don't re-ask.
+**No plan vocabulary in final code** — requirement/EARS ids, phase/task numbers, "per the plan/spec" — anywhere: code, tests, identifiers, comments, commit messages. Enforced by (1) the iron-laws block in every implementer prompt, (2) a named attack item in the adversarial reviewer, and (3) `scripts/scan-plan-vocab.sh`, a deterministic grep gate that must print `clean` before a phase can close. Pass the spec's own id scheme as its third argument.
 
-## Step 2: Launch the workflow
+**No dishonest tests.** Every new test must fail for a realistic bug and survive valid refactors. Mock-echo assertions, bare does-not-throw, file-existence/symbol-name assertions, and tests that reimplement production logic are review findings (doctrine shared with the `audit-tests` skill).
 
-Invoke the `Workflow` tool with `scriptPath` pointing at `workflow.js` **in this skill's directory** (resolve the absolute path — it ships next to this file) and:
+**No scratch artifacts.** One-off verification lives in the plan's `verify` commands, run at the boundary and discarded with it — never committed.
 
-```
-args: {
-  "specPath":  "docs/plans/YYYY-MM-DD-<topic>-design.md",
-  "planDir":   "docs/plans/YYYY-MM-DD-<topic>-plan/",
-  "repoRoot":  "<absolute repo root>",
-  "baseBranch": "main",
-  "branch":    "<topic-branch-name>",
-  "prTitle":   "<PR title>"
-}
-```
+## Worktree lifecycle
 
-The first launch **omits `approved`** — the run plans, writes the approval briefing, and pauses. Do not inline or rewrite the script — pass `scriptPath` so runs are reproducible and resumable. The workflow runs in the background; relay progress from the notification stream and let the user know they can watch `/workflows`.
+- All worktrees live under one sweepable root: `<repoRoot>.worktrees/<taskId>` (sibling of the repo, one `git worktree list` away from auditable).
+- **Setup** (per wave, one cheap agent): `git worktree add <path> -b task/<id> <branch>` — self-healing: a path left by a crashed run is force-removed and recreated first.
+- **Codex sessions in worktrees**: `cwd` = the worktree, `writable_roots` = the **main** repo's `.git` — see the `codex-mcp` skill; this is verified, and getting `cwd` wrong makes the agent edit the wrong checkout.
+- **Teardown at integration** (same agent that merges): after each task branch merges or is discarded → `git worktree remove --force` + `git branch -D`, then `git worktree prune`.
+- **Final sweep** (Deliver phase): prune + remove anything left under the root + delete leftover `task/*` branches — the backstop for died agents and killed runs.
+- **After a crashed run**: nothing to hand-clean — the next run's setup self-heals and the sweep catches strays; or run `git worktree prune` + remove `<repoRoot>.worktrees` yourself.
 
-## Step 3: Plan approval gate
+## The examples
 
-The first run returns `{ outcome: "AWAITING_APPROVAL", approvalDoc, phases, flags }`. `approvalDoc` is a markdown briefing — the high-level plan summary and, per phase, the most important boundary verifications. Read it and present it to the user in chat (it's written to render well as markdown; don't re-summarize it into something thinner), then collect the verdict:
+| Script | Use for | Human gates |
+|---|---|---|
+| `examples/full-delivery.js` | Approved design spec → phased plan → PR with green CI | Plan approval briefing before implementation |
+| `examples/mini-feature.js` | Small well-scoped change, no spec needed | None — task description in, PR out |
 
-- **Approved** → relaunch: same `scriptPath`, same `args` plus `"approved": true`, and `resumeFromRunId` from the first run. All planning replays from cache; implementation starts immediately.
-- **Approved with feedback** → same, plus `"feedback": "<their notes verbatim>"`. The planner applies the feedback to the plan directory before the first phase elaborates.
-- **Rejected / major rework** → treat feedback as spec-level: revise the spec (or send the user back to `writing-specs`), then start a fresh run.
+**Launching** (both): invoke the `Workflow` tool with `scriptPath` pointing at the example **in this skill's directory** (resolve the absolute path), never inlining the script — `scriptPath` + `resumeFromRunId` is what makes crashed runs resumable. Required args always include `repoRoot` (absolute) and `skillDir` (this skill's absolute directory — the boundary scripts live there). The workflow runs in the background; relay progress and point the user at `/workflows`.
 
-## Step 4: Handle the result
+**full-delivery.js** args: `{specPath, planDir, repoRoot, skillDir, baseBranch, branch, prTitle}` (+ `approved`, `feedback`, `clarifications` on relaunch). First launch omits `approved` — the run plans, writes `<planDir>/approval.md`, and pauses with outcome `AWAITING_APPROVAL`. Present the briefing to the user, then relaunch with the same args plus `approved: true` (and `feedback` if conditional) and `resumeFromRunId` — planning replays from cache. Other outcomes: `NEEDS_CONTEXT` (answer via `clarifications` on resume — the only way that invalidates the cached planner call), `PLANNER_FAILED` (run failure, not ambiguity — fix cause, fresh run), `FEEDBACK_FAILED`, `PR_OPEN` / `PR_OPEN_WITH_FAILURES` / `NO_PR`. On PR_OPEN: read `<planDir>/progress.md` and lead with the narrative; report every flag verbatim; then run `/explain-diff-html` on the diff — the walkthrough is part of the deliverable.
 
-The workflow returns `{ outcome, prUrl, phases, flags }`.
+**mini-feature.js** args: `{task, repoRoot, skillDir, baseBranch, branch, prTitle}` — `task` is a plain-language description of the change.
 
-- **`PR_OPEN`** (CI confirmed green) — read `progressDoc` (`<planDir>/progress.md`) and `<planDir>/lessons.md`, then **lead with the narrative**: what got built, phase by phase, in plain prose. The PR URL and the flag list come after. Flags are the autonomous run's deferred questions — blocked tasks, unresolved review findings, escalated reviewer feedback, Codex fallbacks — so report every one verbatim rather than summarizing them away. Then invoke the `explain-diff-html` skill on the branch/PR diff and open the walkthrough alongside the PR URL.
-- **`PR_OPEN_WITH_FAILURES`** — the PR exists but CI is not confirmed green (see `ciGreen` and per-phase `boundaries` in the result). Report exactly which gates are red/unverified before anything else, then proceed as for PR_OPEN.
-- **`NEEDS_CONTEXT`** — the planner ran, understood its job, and asked real questions: the spec was too ambiguous to phase. Get answers from the user, then relaunch with `resumeFromRunId` plus `"clarifications": "<the answers>"` in args — the clarifications are interpolated into the planner's prompt, which invalidates exactly that cached call so planning re-runs with the answers. (Passing answers any other way replays the cached NEEDS_CONTEXT result forever.)
-A dirty working tree also returns `NEEDS_CONTEXT` — the planner checks it before exploring, so nothing expensive runs against a tree someone is mid-edit on.
-- **`PLANNER_FAILED`** — the planner agent died, returned nothing, or returned a malformed plan. This is **not** spec ambiguity, and `clarifications` will not fix it: there was no question. Read `detail` for what came back, then inspect the planner's agent transcript and `<planDir>/journal.jsonl` for the real cause (API errors such as an unsupported `effort` value, a killed agent, a schema rejection). Fix the cause, then start a **fresh run** — see the `args` note below before reusing `resumeFromRunId`.
-- **`FEEDBACK_FAILED`** — the user's conditional approval feedback could not be applied to the plan. Nothing was implemented. Show the detail, resolve with the user, relaunch with revised feedback.
-- **`NO_PR`** — implementation finished but PR creation failed. The branch exists locally/pushed; open the PR manually with `gh`, then report.
-- **Killed or died mid-run** — relaunch with the same `scriptPath` + `args` + `resumeFromRunId`; completed agent calls replay from cache and execution continues from the first incomplete step.
+**Resuming**: killed/died runs relaunch with the same `scriptPath` + args + `resumeFromRunId`; completed agent calls replay from cache. Exception: a failure caused by bad/missing args needs a **fresh** run — wrong values are baked into the cached prompts, and a resume replays them forever. The tell: the run "completes" in seconds with ~0 subagent tokens. `<planDir>/progress.md` is the recovery ledger — it records per-task done/failed status precisely so a resumed orchestrator (or you) can tell what's actually complete.
 
-**When a failure was caused by bad or missing `args`, start a FRESH run — no `resumeFromRunId`.** Every `args` value is interpolated into the agent prompts, so a wrong value is already baked into the cached call; resuming replays the identical stale result forever no matter what you pass the second time. (`clarifications` is the one exception that works on a resume, and only because adding it *changes* the planner prompt and thereby invalidates exactly that cached call.) The diagnostic signature of a cache replay is unmistakable: the run "completes" almost instantly — seconds or milliseconds — with ~0 subagent tokens. Real planning costs tens of thousands of tokens and tens of seconds; an instant, free result means nothing ran.
+## Writing a custom workflow
+
+Copy the closest example and edit. Keep, in this order of importance:
+
+1. The **args guard** (fail in milliseconds on missing/stringified args, not after the planner burned tokens).
+2. **Integration-owned worktree cleanup** + the final sweep.
+3. The **iron laws + hygiene gate** at every boundary.
+4. **Honest failure paths**: dead agents flag as UNVERIFIED, they never silently pass a gate; `filter(Boolean)` every `parallel()` result.
+5. **Flags over questions** after the last human gate.
+
+Codex invocation details (models, efforts, sandbox/config, relay-agent briefing) come from the `codex-mcp` skill — both examples embed its relay template; keep model tables in one place at the top of your script. Agent contracts for the planner, elaborator, and adversarial reviewer live in `agents/` and are dispatched by `agentType` — reuse them rather than re-prompting from scratch.
 
 ## Model map
 
-The model tables live in `workflow.js` (`MODELS`, `REVIEW_TASK_CODEX`, `REVIEW_DEEP_CODEX`). The governing principle: **implementation is never high-complexity work** — expensive models plan ahead of it and review behind it; hard tasks are decomposed until they're average, and subtlety buys more review (`risk: high`), not a bigger implementer.
+The tables live at the top of each example (`MODELS`, `MODEL_ESCALATED`, `REVIEW_TASK_CODEX`, `REVIEW_DEEP_CODEX`). Governing principle: **implementation is never high-complexity work** — hard tasks are decomposed until they're average, and subtlety buys more review (`risk: high`), not a bigger implementer. Simple → `gpt-5.6-luna`/haiku; average → `gpt-5.6-terra`/sonnet; reviews → `gpt-5.6-sol`/opus; running checks → haiku. If the Codex MCP fails twice, the run falls back to the Anthropic column and a flag records it.
 
-| Role | Codex (primary) | Anthropic (fallback) |
-|------|-----------------|----------------------|
-| implement: simple | gpt-5.6-terra, low effort | haiku |
-| implement: average | gpt-5.6-terra, medium effort | sonnet |
-| per-task adversarial review (risk: standard and high) | — (always Claude) | opus, high effort |
-| cross-model 2nd reviewer (risk: high only) | gpt-5.6-sol, high effort | opus, high effort |
-| plan review + final sweeps | gpt-5.6-sol, xhigh effort | opus, xhigh effort |
-| planner / elaborator (always Claude) | — | opus, xhigh effort |
-| boundary hygiene + running checks | — | haiku |
-| CI watch, PR comment triage + replies | — | sonnet |
-
-Running verifications is mechanical — execute commands, capture exit codes — so it sits on the cheapest tier. The one piece of judgment there is grouping failures by root cause so parallel fixers don't collide on the same file; that instruction is explicit in the prompt. CI watch and PR comment triage stay a tier up because they interpret free-form reviewer feedback.
-
-## Review feedback on the PR
-
-After CI settles, the Deliver phase reads reviewer feedback and triages each comment into **fix / reply / escalate** before acting:
-
-- **fix** — a real defect in this PR's diff. An implementer fixes it at the root cause, a 🤖-prefixed reply says what changed, the thread is resolved, and CI re-runs.
-- **reply** — a question, misunderstanding, or scope/preference request. Gets a real 🤖 answer citing code; the thread is left open for the reviewer to close. **No code changes** — a question is not a fix request.
-- **escalate** — feedback that invalidates the plan or needs an architectural decision. Becomes a flag for the user and a 🤖 reply saying it's been flagged; never silently "fixed."
-
-Bots are judged like any other reviewer — CodeRabbit, Copilot, Greptile and Bugbot are frequently out of scope, so the triage prompt says to judge the code rather than the confidence of the comment.
-
-**On why this polls:** GitHub has no push channel a local agent can subscribe to — the GraphQL schema has no Subscription type, no SSE/long-poll endpoint exists for comments, and the official GitHub MCP server deliberately advertises no subscribe capability. `gh pr checks --watch` streams *check runs* only, and it is not a proxy for bot completion (CodeRabbit and Copilot publish no check run at all). So the loop polls all three comment buckets — inline review threads, review submissions, and conversation comments — using conditional requests, which cost zero primary rate limit when they return 304. It sweeps a few times at ~90s intervals (GitHub's `X-Poll-Interval` floor is 60s) to catch bots that post minutes after CI goes green, then stops. For a long-running vigil beyond that, hand off to `babysit-pr`.
-
-Codex runs with `sandbox: danger-full-access` and `approval-policy: never` via the `codex-runner` agent — full permissions, no prompts. Every Codex call writes a run log (config, full prompt, verbatim final response, conversation id) to `<planDir>/runs/`, and the full inner transcript is in `~/.codex/sessions/` under that conversation id. If the Codex MCP fails twice, the whole run falls back to the Anthropic column and a flag records it. If the user's Codex model names differ, edit `MODELS` before launching.
-
-## Agents this skill relies on
-
-`workflow-planner` (spec → plan directory), `dynamic-elaborator` (phase sketch → per-task files, JIT), `codex-runner` (frozen Codex invocation), `adversarial-reviewer` (clean-context diff attacks). Their contracts live in `agents/`.
-
-## Common Mistakes
+## Common mistakes
 
 | Mistake | Fix |
-|---------|-----|
+|---|---|
 | Reading the spec/plan into the main context "to help" | The workflow's agents read from disk. Your job is launch, relay, report. |
-| Inlining the script instead of using `scriptPath` | `scriptPath` + `resumeFromRunId` is what makes crashed runs resumable. |
-| Re-asking the user about PR strategy they already stated | Ask once, only if genuinely undecided. |
-| Passing `approved: true` on the first launch | The approval gate is the point — skip it only when the user explicitly pre-approves the plan sight-unseen. |
-| Relaunching after approval without `resumeFromRunId` | Without it, planning re-runs from scratch instead of replaying from cache. |
-| Skipping the `/explain-diff-html` walkthrough on PR_OPEN | The walkthrough is part of the deliverable, not an optional extra. |
-| Treating flags as failure | Flags are the designed output of autonomy — surface all of them, let the user triage. |
-| Relaunching a failed run fresh | Always pass `resumeFromRunId` — completed implementation replays from cache instead of re-running. Sole exception: a failure caused by bad/missing `args` (see below). |
-| Resuming a run that failed because of bad or missing `args` | Bad `args` are already baked into the cached agent prompts, so `resumeFromRunId` replays the same failure forever. Fix the args and start a **fresh** run. A completion in seconds with ~0 subagent tokens is the tell that you got a cache replay, not a real run. |
-| Pre-elaborating later phases by editing the plan directory mid-run | Elaboration is just-in-time on purpose; earlier phases change what later phases should build. |
-| Answering NEEDS_CONTEXT questions anywhere but `args.clarifications` | Only a changed planner prompt invalidates the cached call — spec edits alone replay the stale NEEDS_CONTEXT result. |
+| Inlining the script instead of `scriptPath` | `scriptPath` + `resumeFromRunId` is what makes runs resumable. |
+| Passing `approved: true` on the first full-delivery launch | The approval gate is the point — skip only on explicit pre-approval. |
+| Resuming after a bad-args failure | Fresh run — cached prompts already contain the bad values. |
+| Omitting `skillDir` | The hygiene gate silently degrades — the boundary scan can't run. |
+| Letting a reviewer fix its own findings | Findings go back to an implementer session; reviewers only re-verify. |
+| Cleaning worktrees in a separate late phase "for tidiness" | Cleanup belongs to integration; a separate phase runs zero times when the run dies before it. |
+| Treating flags as failure | Flags are the designed output of autonomy — surface all of them verbatim. |
+| Writing a custom workflow from a blank page | Copy an example; the failure handling is the hard-won part. |

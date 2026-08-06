@@ -1,6 +1,6 @@
 {
   "name": "code-factory",
-  "description": "Agent skills for structured software delivery: spec writing, issue creation, task decomposition, and implementation",
+  "description": "Agent skills for dynamic software delivery: spec writing, worktree-parallel workflow execution, cross-model adversarial review, and PR babysitting",
   "owner": {
     "name": "xmtplabs",
     "url": "https://github.com/xmtplabs"
@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "code-factory",
-      "version": "0.6.5",
+      "version": "0.8.0",
       "source": "./"
     }
   ]

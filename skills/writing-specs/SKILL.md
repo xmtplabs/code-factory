@@ -1,7 +1,6 @@
 ---
 name: writing-specs
 description: Use when starting any feature, system change, or bugfix that requires architectural decisions — before writing implementation plans or code. Triggers on new projects, multi-component changes, API design, or when the user says "design", "spec", or "architecture".
-model: opus
 ---
 
 # Writing Design Docs
@@ -156,7 +155,7 @@ Each marker records both the question AND the assumption the spec proceeds with.
 
 **Interactive mode (user present):** Present markers one at a time, each with a recommended answer. The user can accept the recommendation, provide their own answer, or defer. Integrate each accepted answer immediately into the spec — don't batch them. Remove all markers from the final written spec after resolution.
 
-**Autonomous mode (coder-task):** Post clarification questions as a GitHub issue comment so the issue author can respond asynchronously. Proceed immediately with decomposition and execution using the assumed answers — do NOT wait for responses. If the user later responds on the issue, coder-task's "Receiving Comments" mechanism handles updating the spec and re-running affected steps.
+**Autonomous mode (no user present):** Proceed immediately with the assumed answers — do NOT block waiting for responses. Keep the markers in the spec's Context section as a record of assumptions made, and surface them as flags in whatever workflow consumes the spec.
 
 **Rules:**
 - Maximum 3 markers per spec. If you have more than 3 unknowns, the scope is too ambiguous — ask the user to clarify before drafting.
@@ -169,7 +168,7 @@ Once the user approves the draft, run one adversarial review before writing the 
 
 **When:** automatically for Medium and Large specs (per the Scaling Guide); for Small specs only if the user asks. Run it once per spec — re-run only if triage causes a major rewrite (new approach, new components), not for wording fixes.
 
-**How:** dispatch a Codex session via `mcp__codex__codex` with `sandbox: read-only`, `approval-policy: never`, model `gpt-5.6-sol`, `config: {"model_reasoning_effort": "xhigh"}`, `cwd` set to the repo root. If the Codex MCP is unavailable, fall back to a clean-context `adversarial-reviewer` subagent (Opus, high effort). Either way the reviewer gets **only** the draft spec and repo access — no drafting history, no rationale. The prompt:
+**How:** dispatch a Codex review session per the `codex-mcp` skill (review mode: `sandbox: read-only`, `approval-policy: never`, model `gpt-5.6-sol`, effort `xhigh`, `cwd` = repo root — the skill has the verified parameters and failure signatures). If the Codex MCP is unavailable, fall back to a clean-context `adversarial-reviewer` subagent (Opus, high effort). Either way the reviewer gets **only** the draft spec and repo access — no drafting history, no rationale. The prompt:
 
 ```
 Adversarially review this design spec. Assume it is flawed; your job is to find how.
@@ -187,7 +186,7 @@ Report each finding: severity CRITICAL|MAJOR|MINOR, spec section, the specific
 defect, and what would go wrong downstream if unfixed. Verdict: PASS or ISSUES.
 ```
 
-**Triage:** present findings to the user with your recommended disposition for each — *accept & fix* (with proposed edit), *reject* (with reason), or *your call* — the same interaction pattern as clarification markers. Integrate accepted fixes immediately; cap at 2 review cycles, then proceed with remaining findings noted in the spec's Context section. In autonomous mode (coder-task), skip user triage: apply CRITICAL and MAJOR accepted-disposition fixes directly, post the findings summary as a GitHub issue comment, and proceed.
+**Triage:** present findings to the user with your recommended disposition for each — *accept & fix* (with proposed edit), *reject* (with reason), or *your call* — the same interaction pattern as clarification markers. Integrate accepted fixes immediately; cap at 2 review cycles, then proceed with remaining findings noted in the spec's Context section. In autonomous mode (no user present), skip user triage: apply CRITICAL and MAJOR fixes directly and note the findings summary in the spec's Context section.
 
 ## Scaling Guide
 

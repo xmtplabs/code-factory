@@ -68,4 +68,4 @@ If dispatched with adversarial review findings against an existing plan director
 
 ## Return
 
-Write the plan files, then return the structured summary the dispatcher's schema requests: `status` (`DONE`, or `NEEDS_CONTEXT` with `questions` when the tree is dirty or the spec cannot be phased), preface text, phase list (id, name, slug, goal, EARS ids, dependencies), check commands, and any flags (spec ambiguities you resolved by assumption, risks worth surfacing). Do not paste file bodies back.
+Write the plan files, then return the structured summary the dispatcher's schema requests: `status` (`DONE`, or `NEEDS_CONTEXT` with `questions` when the tree is dirty or the spec cannot be phased), preface text, phase list (id, name, slug, goal, EARS ids, dependencies), check commands, `idPattern` (an extended-regex matching the spec's requirement-id scheme, e.g. `REQ-[0-9]+`, used by the boundary scan that keeps requirement ids out of code — empty string if the spec has none), and any flags (spec ambiguities you resolved by assumption, risks worth surfacing). Do not paste file bodies back.
