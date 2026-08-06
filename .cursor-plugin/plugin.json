@@ -2,7 +2,7 @@
   "name": "code-factory",
   "displayName": "Code Factory",
   "description": "Agent skills for dynamic software delivery: spec writing, worktree-parallel workflow execution, cross-model adversarial review, and PR babysitting",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "skills": "./skills/",
   "agents": "./agents/"
 }

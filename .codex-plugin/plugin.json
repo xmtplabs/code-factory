@@ -1,6 +1,6 @@
 {
   "name": "code-factory",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Agent skills for dynamic software delivery: spec writing, worktree-parallel workflow execution, cross-model adversarial review, and PR babysitting",
   "author": {
     "name": "xmtplabs",
