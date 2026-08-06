@@ -1,7 +1,7 @@
 {
   "name": "code-factory",
-  "version": "0.6.5",
-  "description": "Agent skills for structured software delivery: spec writing, task decomposition, and implementation",
+  "version": "0.7.0",
+  "description": "Agent skills for dynamic software delivery: spec writing, worktree-parallel workflow execution, cross-model adversarial review, and PR babysitting",
   "author": {
     "name": "xmtplabs",
     "url": "https://github.com/xmtplabs"
@@ -11,28 +11,26 @@
   "keywords": [
     "skills",
     "spec-writing",
-    "task-decomposition",
-    "implementation",
     "workflows",
-    "tdd",
-    "code-review",
-    "bugfix",
-    "traceability"
+    "worktrees",
+    "adversarial-review",
+    "codex",
+    "pr-automation",
+    "test-audit"
   ],
   "skills": "./skills/",
-  "agents": "./.codex/agents/",
   "interface": {
     "displayName": "Code Factory",
-    "shortDescription": "Structured software delivery: spec writing, task decomposition, and implementation",
-    "longDescription": "A complete pipeline for turning rough ideas into implemented, tested, and reviewed code. Includes skills for writing EARS-format design specs, bugfix-specific 3-section specs, decomposing specs into TDD-enforced task lists with parallel markers, orchestrating implementation with 4 parallel specialized code reviewers and test coverage checks, auto-debug escalation, and end-to-end GitHub issue-to-PR automation with content-based bug detection.",
+    "shortDescription": "Dynamic software delivery: specs, autonomous workflow execution, adversarial review, PR babysitting",
+    "longDescription": "Skills for turning rough ideas into merged PRs. Write EARS-format design specs with adversarial spec review, deliver them autonomously through dynamic workflows (worktree-parallel implementers, cross-model adversarial code review, deterministic phase-boundary verification), drive the Codex MCP with a verified known-good configuration, babysit PRs and PR stacks (Graphite and gh-stack) to green, and audit test suites for low-value tests.",
     "developerName": "xmtplabs",
     "category": "Development",
     "capabilities": ["Read", "Write"],
     "websiteURL": "https://github.com/xmtplabs/code-factory",
     "defaultPrompt": [
       "Use Code Factory to write a design spec for my feature",
-      "Decompose this spec into implementable tasks",
-      "Execute the task plan and implement the code"
+      "Execute this approved spec as a dynamic workflow",
+      "Babysit my PR stack until everything is green"
     ]
   }
 }

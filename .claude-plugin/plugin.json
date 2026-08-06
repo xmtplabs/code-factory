@@ -1,7 +1,7 @@
 {
   "name": "code-factory",
-  "description": "Agent skills for structured software delivery: spec writing, issue creation, task decomposition, and implementation",
-  "version": "0.6.7",
+  "description": "Agent skills for dynamic software delivery: spec writing, worktree-parallel workflow execution, cross-model adversarial review, and PR babysitting",
+  "version": "0.7.0",
   "author": {
     "name": "xmtplabs"
   },
@@ -10,12 +10,11 @@
   "keywords": [
     "skills",
     "spec-writing",
-    "issue-creation",
-    "task-decomposition",
-    "implementation",
     "workflows",
-    "bugfix",
-    "code-review",
-    "traceability"
+    "worktrees",
+    "adversarial-review",
+    "codex",
+    "pr-automation",
+    "test-audit"
   ]
 }
