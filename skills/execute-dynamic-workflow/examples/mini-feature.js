@@ -79,7 +79,7 @@ const PLAN = {
   required: ['preface', 'checks', 'tasks'],
 }
 const plan = await agent(
-  `In ${A.repoRoot}: verify the working tree is clean (if dirty, return blocked naming the files), then create/check out branch ${A.branch} from ${A.baseBranch}.\n\nThe change to deliver:\n${A.task}\n\nExplore the codebase, then return: preface (≤30 lines: stack, conventions with pattern-file paths, directories not to touch), checks (the repo's build/lint/typecheck/test commands), and 1-4 tasks. Per task: id (short slug), title, context (≤150 words of current-state facts, decisions made, and file references — an implementer must never search), deps (task ids), risky (true if a defect would be subtle or damaging → gets adversarial review). Tasks run in parallel worktrees: keep their file footprints disjoint.`,
+  `In ${A.repoRoot}: verify the working tree is clean (if dirty, return blocked naming the files), then create/check out branch ${A.branch} from ${A.baseBranch}.\n\nThe change to deliver:\n${A.task}\n\nRun the repo's typecheck/build first and read every error: if the tree is already red, each error is required work and must be assigned to a task explicitly, naming file and symbol.\n\nExplore the codebase, then return: preface (≤30 lines: stack, conventions with pattern-file paths, directories not to touch), checks (the repo's build/lint/typecheck/test commands), and 1-6 tasks. Per task: id (short slug), title, context (≤150 words of current-state facts, decisions made, and file references — an implementer must never search), deps (task ids), risky (true if a defect would be subtle or damaging → gets adversarial review).\n\nSIZING: one concern per task, ~100-150 changed lines. Split a schema/data-structure change from the behavior consuming it, and both from bulk test updates — a task whose title needs "and" to join two unrelated verbs is too big. Oversized tasks are discarded whole when review fails, losing the correct parts with the bad. Tasks run in parallel worktrees, so each wave needs disjoint file footprints — when two tasks must touch one file, give the second a dep so they land in different waves rather than merging them into one big task.`,
   { model: 'opus', effort: 'high', schema: PLAN, label: 'plan', phase: 'Plan' },
 )
 if (!plan || plan.blocked || !plan.tasks || !plan.tasks.length) {
@@ -105,9 +105,12 @@ async function runTask(t) {
   if (!impl || impl.status === 'BLOCKED') { flags.push(`${t.id} blocked: ${impl ? impl.summary : 'agent died'}`); return false }
   if (!t.risky) { log(`  ✓ ${t.id}`); return true }
 
-  // Adversarial review, clean context, from the main checkout. One fix cycle
-  // continuing the implementer's session, then re-review scoped to findings.
-  for (let cycle = 0; cycle < 2; cycle++) {
+  // Adversarial review, clean context, from the main checkout. Cycle 1
+  // continues the implementer's session; cycle 2 dispatches a fresh session
+  // (a session that failed to fix once repeats its misunderstanding). After
+  // the last cycle we LAND with a flag unless a CRITICAL survived — work that
+  // failed review is usually mostly right, and the boundary check still runs.
+  for (let cycle = 0; cycle < 3; cycle++) {
     const review = await agent(
       `${plan.preface}\n\nAdversarially review the diff ${A.branch}...task/${t.id} in ${A.repoRoot} for: "${t.title}" (context: ${t.context}). Assume it is wrong; attack correctness under hostile inputs, dishonest tests (would a real bug fail them? would a valid refactor break them?), plan vocabulary in code/tests/comments, stubs, swallowed errors. Verdict PASS or ISSUES; MINOR-only is PASS.`,
       { agentType: 'code-factory:adversarial-reviewer', model: 'opus', effort: 'high', schema: REVIEW, label: `review:${t.id}`, phase: 'Implement' },
@@ -115,8 +118,15 @@ async function runTask(t) {
     const findings = review ? (review.findings || []).filter((f) => f.severity !== 'MINOR') : []
     if (!review) { flags.push(`${t.id}: review agent died — UNVERIFIED`); return true }
     if (review.verdict === 'PASS' || !findings.length) { log(`  ✓ ${t.id} — review PASS${cycle ? ' after fix' : ''}`); return true }
-    if (cycle === 1) { flags.push(`${t.id}: unresolved findings: ${findings.map((f) => f.summary).join('; ')}`); return !findings.some((f) => f.severity === 'CRITICAL') }
-    impl = await implement(cwd, `Review of "${t.title}" found issues — fix each at the root cause (or rebut precisely), one additional commit:\n${findings.map((f) => `- [${f.severity}] ${f.summary}`).join('\n')}\n\n${ironLaws}`, `fix:${t.id}`, impl.threadId)
+    if (cycle === 2) {
+      flags.push(`${t.id}: landed with unresolved findings after 3 cycles: ${findings.map((f) => `[${f.severity}] ${f.summary}`).join('; ')}`)
+      return !findings.some((f) => f.severity === 'CRITICAL')
+    }
+    const fixPrompt = `Review of "${t.title}" found issues — fix each at the root cause (or rebut precisely), one additional commit. Fix ONLY what is listed; do not refactor beyond the findings (scope creep here fails the next review):\n${findings.map((f) => `- [${f.severity}] ${f.summary}`).join('\n')}\n\n${ironLaws}`
+    impl = cycle === 0
+      ? await implement(cwd, fixPrompt, `fix:${t.id}`, impl.threadId)
+      // Fresh session: it has never seen the task, so restate the context.
+      : await implement(cwd, `${plan.preface}\n\nYou are taking over a task another session could not finish correctly. Its work is already committed in this worktree; review it, then fix what the findings identify.\n\n## Task: ${t.title}\nYour worktree (work ONLY here): ${cwd}\n${t.context}\n\n${fixPrompt}`, `fix2:${t.id}`)
     if (!impl || impl.status === 'BLOCKED') { flags.push(`${t.id} fix blocked`); return false }
   }
   return true
@@ -138,7 +148,7 @@ while (pending.length) {
   // Integration owns cleanup: merge or discard every task branch, and remove
   // its worktree in the same step — worktrees never outlive their task.
   await agent(
-    `In ${A.repoRoot} on branch ${A.branch} (checkout first): merge in order ${merged.map((t) => `task/${t.id}`).join(', ') || '(none)'} with git merge --no-ff. Resolve conflicts yourself, keeping both tasks' intended behavior. After each branch merges (and for the unmerged: ${wave.filter((_, i) => !results[i]).map((t) => `task/${t.id}`).join(', ') || '(none)'}), immediately: git worktree remove --force "<its worktree under ${WT_BASE}>" and git branch -D "<branch>". Finish with git worktree prune. Report what merged.`,
+    `In ${A.repoRoot} on branch ${A.branch} (checkout first): merge in order ${merged.map((t) => `task/${t.id}`).join(', ') || '(none)'} with git merge --no-ff. Resolve conflicts yourself, keeping both tasks' intended behavior.\n\nThen remove the worktree under ${WT_BASE} for every task in this wave (git worktree remove --force), including the unmerged: ${wave.filter((_, i) => !results[i]).map((t) => `task/${t.id}`).join(', ') || '(none)'}.\n\nDelete the BRANCH (git branch -D) only for branches that merged. For unmerged tasks, RENAME the branch to "salvage/<id>" instead of deleting it — failed review usually means mostly-right work, and it must stay recoverable. Finish with git worktree prune. Report what merged and any salvage branch names.`,
     { model: 'sonnet', effort: 'medium', label: 'worktrees:integrate', phase: 'Implement' },
   )
   wave.forEach((t) => done.add(t.id))
