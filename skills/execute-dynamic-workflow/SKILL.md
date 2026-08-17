@@ -71,8 +71,16 @@ and other strings. Type checking cannot prove that logic is correct.
 
 For parallel work, verify each candidate commit and merge one lane at a time.
 Run relevant checks after each merge when the lanes share a contract. Run the
-repository's canonical format, typecheck, lint, build, and test commands on the
-complete integrated change before review.
+repository's canonical format, typecheck, lint, and build commands locally on
+the complete integrated change before review, regardless of test suite size.
+Run relevant targeted test commands locally before review.
+
+When the full-repository or full-application test suite has thousands of tests,
+prefer CI for the full suite. Run targeted test subsets locally, push the
+candidate, and wait for CI to run the full suite. Do not delay the push to run
+the full suite locally unless the repository requires it or CI cannot run it.
+For smaller suites, run the repository's canonical test command locally before
+review.
 
 Run deterministic commands directly. Do not spend an agent call only to run a
 known command or summarize its exit code.

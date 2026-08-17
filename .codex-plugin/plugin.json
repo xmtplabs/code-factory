@@ -1,6 +1,6 @@
 {
   "name": "code-factory",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Agent skills for dynamic software delivery: spec writing, selective parallel execution, independent EARS verification, adversarial review, and PR babysitting",
   "author": {
     "name": "xmtplabs",

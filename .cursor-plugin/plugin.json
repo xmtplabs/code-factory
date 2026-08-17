@@ -2,7 +2,7 @@
   "name": "code-factory",
   "displayName": "Code Factory",
   "description": "Agent skills for dynamic software delivery: spec writing, selective parallel execution, independent EARS verification, adversarial review, and PR babysitting",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "skills": "./skills/",
   "agents": "./agents/"
 }
