@@ -7,7 +7,7 @@ description: Use when driving OpenAI Codex through the Codex MCP server — impl
 
 Drive Codex sessions through the `codex` MCP server with a known-good configuration. This is the single place Codex invocation details live — callers (skills, workflows, agents) follow this recipe instead of constructing MCP parameters from memory.
 
-Everything in this file marked **verified** was tested live against codex-cli 0.145.0 (Aug 2026). When Codex updates, re-verify the "Verified surface" section before trusting it — model names and sandbox behavior are the two things that drift.
+The tool and sandbox behavior marked **verified** was tested live against codex-cli 0.145.0 (Aug 2026). The Astra model settings were checked against the local model catalog for codex-cli 0.153.3 on 2026-09-08. When Codex updates, check the "Verified surface" section again. Model names and sandbox behavior can change.
 
 ## Side-effect contract (read first)
 
@@ -33,14 +33,16 @@ Two tools:
 - `conversationId` on `codex-reply` is a deprecated alias for `threadId` — it still works, but write `threadId` in anything new.
 - Replies inherit the original session's model/sandbox/config.
 
-**Models (verified valid on this account):**
+**Models:** The Astra identifier and reasoning levels were verified against the local Codex model catalog for codex-cli 0.153.3 on 2026-09-08. The other models retain their earlier verification.
 
-| Model | Tier | Use for |
-|---|---|---|
-| `gpt-5.6-sol` | flagship (account default) | deep review, plan review, final sweeps |
-| `gpt-5.6-terra` | balanced | implementation |
-| `gpt-5.6-luna` | fast | mechanical/simple tasks |
-| `gpt-5.5`, `gpt-5.4` | previous gen | fallbacks |
+| Model | Effort | Tier | Use for |
+|---|---|---|---|
+| `gpt-6-astra` | `high` | flagship | complex implementation, deep review, plan review, final sweeps |
+| `gpt-6-astra` | `low` | second tier | routine implementation |
+| `gpt-5.6-luna` | `low` | fast | mechanical/simple tasks |
+| `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.5`, `gpt-5.4` | set explicitly | previous gen | fallbacks |
+
+Both Astra tiers use the model identifier `gpt-6-astra`. Set the tier with `config.model_reasoning_effort`; do not add the effort to the model identifier.
 
 Invalid names (e.g. `gpt-5.6`, `gpt-5.6-codex`) fail the whole call with a 400: *"The '…' model is not supported when using Codex with a ChatGPT account."* If a Codex call fails instantly with that message, fix the model name — nothing else is wrong.
 
@@ -50,19 +52,19 @@ Invalid names (e.g. `gpt-5.6`, `gpt-5.6-codex`) fail the whole call with a 400: 
 "config": { "model_reasoning_effort": "high" }
 ```
 
-Valid values for the 5.6 family, verified: `none`, `low`, `medium`, `high`, `xhigh`, `max`. `minimal` is rejected with a 400. **Footgun:** an unrecognized value (or a misspelled config key) is *silently ignored* and the session runs at the config default — a typo here does not error, it quietly downgrades. Copy values from this list exactly.
+The Codex model catalog lists these Astra effort values: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Use `high` for the flagship tier and `low` for the second tier. Astra defaults to `medium` when effort is omitted, so always set it explicitly. Do not use `none` or `minimal` for Astra. The earlier 5.6 verification listed `none`, `low`, `medium`, `high`, `xhigh`, `max`; `minimal` was rejected with a 400. An unrecognized value or misspelled config key can be silently ignored. Copy the key and values exactly.
 
 ## Default invocation recipe
 
 ```json
 {
   "prompt": "<the task>",
-  "model": "gpt-5.6-terra",
+  "model": "gpt-6-astra",
   "sandbox": "workspace-write",
   "approval-policy": "never",
   "cwd": "<absolute path to the checkout this session owns>",
   "config": {
-    "model_reasoning_effort": "medium",
+    "model_reasoning_effort": "low",
     "sandbox_workspace_write": {
       "network_access": true,
       "writable_roots": ["<main repo .git dir>"]
@@ -93,13 +95,13 @@ Match effort to the job; don't run everything hot:
 
 | Job | Model | Effort |
 |---|---|---|
-| Mechanical edit, rename, config change | luna | `low` |
-| Typical implementation task | terra | `medium` |
-| Subtle implementation, tricky fix | terra | `high` |
-| Adversarial review of one diff | sol | `high` |
-| Plan review, whole-branch final sweep | sol | `xhigh` |
+| Mechanical edit, rename, config change | `gpt-5.6-luna` | `low` |
+| Typical implementation task | `gpt-6-astra` | `low` |
+| Subtle implementation, tricky fix | `gpt-6-astra` | `high` |
+| Adversarial review of one diff | `gpt-6-astra` | `high` |
+| Plan review, whole-branch final sweep | `gpt-6-astra` | `high` |
 
-`max` exists (verified) — reserve it for one-shot problems worth minutes of thinking; it is not a better default.
+The catalog also lists `xhigh`, `max`, and `ultra`. Use these only when a task explicitly requires more effort than the flagship default.
 
 ## Continuing a session
 
@@ -107,7 +109,7 @@ Capture `threadId` from every result. Continue with `codex-reply` when the next 
 
 ## Review mode
 
-For a cross-model adversarial review: `sandbox: read-only`, model `gpt-5.6-sol`, effort `high` (single diff) or `xhigh` (plan / whole branch). Give the reviewer **only** the artifact and repo access — no drafting history, no author rationale. Map Codex's output honestly: if it is ambiguous about whether an issue is real, it is a finding; never infer a PASS Codex didn't state. If the caller needs structure, report verdict `PASS|ISSUES` plus one entry per defect (severity, file, summary, concrete failure scenario) and the `threadId`.
+For an adversarial review: `sandbox: read-only`, model `gpt-6-astra`, effort `high` for a single diff, plan, or whole branch. This is a cross-model review only when the author used a different model. Give the reviewer **only** the artifact and repo access — no drafting history, no author rationale. Map Codex's output honestly: if it is ambiguous about whether an issue is real, it is a finding; never infer a PASS Codex didn't state. If the caller needs structure, report verdict `PASS|ISSUES` plus one entry per defect (severity, file, summary, concrete failure scenario) and the `threadId`.
 
 ## Using Codex inside Workflow scripts
 
