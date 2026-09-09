@@ -43,6 +43,8 @@ For parallel work, the top-level orchestrator creates one Git worktree and one
 subagent per lane. Start all worktrees from the same verified commit. The
 orchestrator verifies Git state and integrates each lane. Do not delegate basic
 Git setup, ancestry checks, merge verification, or cleanup to another agent.
+These worktrees isolate implementation lanes. Do not create an additional
+worktree for each reviewer; use the review checkout rules in section 6.
 
 ## 3. Use model diversity
 
@@ -90,6 +92,23 @@ known command or summarize its exit code.
 Start one reviewer with clean context. Give it only the requirements, repository
 path, exact base and candidate commits, and any named risk lens. The reviewer
 must inspect the frozen integrated diff and assume it is wrong.
+
+Run adversarial reviews in the existing checkout that contains the work. For a
+lane review, use that lane's worktree. For an integrated review, use the
+integration checkout. Set the reviewer's working directory to that exact path
+and use read-only access. Independent review requires a separate reviewer with
+clean context; it does not require a separate Git worktree.
+
+Avoid creating a separate review worktree or clone. Use one only when a specific
+isolation need prevents review in the existing checkout. Record that need and
+verify that the separate checkout contains the exact candidate commit before
+review starts.
+
+Before review, confirm that HEAD matches the candidate commit and that the
+working tree is clean. Keep the checkout fixed until review ends: do not edit
+files, switch branches, merge, or apply fixes there during review. If the
+candidate changes, stop the review and give the reviewer the new commit before
+it continues.
 
 The review must attack requirement coverage, baseline compatibility, changed or
 deleted tests, cross-module seams, embedded string logic, error paths, and tests
