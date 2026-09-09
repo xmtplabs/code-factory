@@ -1,6 +1,6 @@
 {
   "name": "code-factory",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "private": true,
   "description": "Agent skills for dynamic software delivery — see README",
   "scripts": {
