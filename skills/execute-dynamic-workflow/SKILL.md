@@ -148,6 +148,10 @@ run or monitor CI and independent EARS verification concurrently on the exact
 same commit. Treat green repository checks as supporting evidence, not as EARS
 verification. Complete delivery only after both gates pass on the final commit.
 
+When finished, remove all temporary worktrees created by this workflow with
+`git worktree remove`. Preserve any unmerged or uncommitted work first. Leave
+pre-existing worktrees untouched and report any cleanup that remains blocked.
+
 Report the final commit, checks, review status, EARS verification evidence,
 model substitutions, and all unresolved requirements. Preserve useful failed
 work for recovery.
