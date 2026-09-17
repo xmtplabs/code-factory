@@ -17,7 +17,7 @@ Rough idea → writing-specs → execute-dynamic-workflow → PR with green CI �
 
 Standalone utilities:
 
-- **codex-cli** — The verified recipe for driving Codex through the `codex` Claude Code plugin: slash commands, the companion script surface, model names, the read-only/`--write` contract, effort ladder, and failure signatures. Other skills reference it instead of hardcoding Codex details.
+- **codex-cli** — The choices code-factory makes when driving Codex through the `codex` plugin: model and effort ladder, session scoping to the owning checkout, and cross-model review discipline. The plugin documents its own commands and flags; other skills reference this instead of hardcoding Codex details.
 - **audit-tests** — Audit an existing test suite for low-value, brittle, duplicative, or AI-generated tests and produce a precise cleanup plan. Its test-quality doctrine is also enforced at review time by the adversarial reviewer.
 
 ## Skills
@@ -27,7 +27,7 @@ Standalone utilities:
 | `writing-specs` | Design specs with EARS requirements, clarification markers, brownfield gap analysis, and adversarial spec review |
 | `execute-dynamic-workflow` | Spec → verified change with single-owner implementation, selective worktree parallelism, and cross-model adversarial review |
 | `babysit-pr` | Long-running PR/stack monitor: fix CI, respond to reviews, push verified fixes — Graphite, gh-stack, or standalone |
-| `codex-cli` | Verified known-good configuration for the Codex plugin (commands, models, effort, write/review contract) |
+| `codex-cli` | Model/effort ladder, session scoping, and review discipline for Codex sessions |
 | `audit-tests` | Test-suite audit: keep/delete/merge/upgrade grading with a behavior-value rubric |
 
 ## Agents
