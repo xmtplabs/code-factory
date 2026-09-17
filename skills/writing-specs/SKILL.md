@@ -168,7 +168,7 @@ Once the user approves the draft, run one adversarial review before writing the 
 
 **When:** automatically for Medium and Large specs (per the Scaling Guide); for Small specs only if the user asks. Run it once per spec — re-run only if triage causes a major rewrite (new approach, new components), not for wording fixes.
 
-**How:** dispatch a Codex review session per the `codex-mcp` skill (review mode: `sandbox: read-only`, `approval-policy: never`, model `gpt-5.6-sol`, effort `xhigh`, `cwd` = repo root — the skill has the verified parameters and failure signatures). If the Codex MCP is unavailable, fall back to a clean-context `adversarial-reviewer` subagent (Opus, high effort). Either way the reviewer gets **only** the draft spec and repo access — no drafting history, no rationale. The prompt:
+**How:** dispatch a Codex review session per the `codex-cli` skill (run `/codex:adversarial-review`, or the companion script's `adversarial-review` subcommand, from the repo root — reviews are review-only by construction; the skill has the verified flags and failure signatures). If Codex is unavailable, fall back to a clean-context `adversarial-reviewer` subagent (Opus, high effort). Either way the reviewer gets **only** the draft spec and repo access — no drafting history, no rationale. The prompt:
 
 ```
 Adversarially review this design spec. Assume it is flawed; your job is to find how.
