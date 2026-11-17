@@ -33,20 +33,20 @@ This skill covers the calls code-factory makes on top of that.
 
 ## Model and effort
 
-Verified against `codex debug models` on 2026-09-17.
+Verified against `codex debug models` on 2026-11-17.
 
 | Job | Model | Effort |
 |---|---|---|
-| Mechanical edit, rename, config change | `gpt-5.6-luna` | `low` |
-| Typical implementation task | `gpt-6-astra` | `low` |
-| Subtle implementation, tricky fix | `gpt-6-astra` | `high` |
-| Adversarial review, plan review, final sweep | `gpt-6-astra` | `high` |
+| Mechanical edit, rename, config change | `gpt-6.1-terra` | `low` |
+| Typical implementation task | `gpt-6.2-sol` | `high` |
+| Subtle implementation, tricky fix | `gpt-6.2-astra` | `high` |
+| Adversarial review, plan review, final sweep | `gpt-6.2-astra` | `high` |
 
-Both Astra tiers use the identifier `gpt-6-astra`; set the tier with
-`--effort`. Astra defaults to `medium`, and also accepts `xhigh`, `max`, and
-`ultra` — use those only when a task explicitly calls for more than the
-flagship default. Don't use `none` or `minimal` with Astra. Fallbacks:
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.5`.
+Set the effort explicitly with `--effort`. Use `xhigh`, `max`, or `ultra`
+only when the task explicitly calls for more reasoning.
+
+If the listed model is unavailable, use `gpt-6.2-sol` if available, then
+`gpt-6.1-sol`. Keep the effort listed for the job.
 
 A bad model name fails instantly with a 400 (*"not supported when using Codex
 with a ChatGPT account"*); fix the name, nothing else is wrong.
