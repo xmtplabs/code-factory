@@ -11,7 +11,7 @@ Rough idea → writing-specs → execute-dynamic-workflow → PR with green CI �
                   +------------------ feedback ----------------+
 ```
 
-1. **writing-specs** — Collaborate with the user on a design spec with EARS requirements, then run an adversarial spec review (Codex, clean context) before writing the artifact. This is the human checkpoint.
+1. **writing-specs** — Collaborate with the user on a design spec with EARS requirements, then run a clean-context adversarial review before saving the plan in an external service. Prefer OpenArtifacts when available and no service is specified. Ask the user if the destination is unclear.
 2. **execute-dynamic-workflow** — Deliver the spec with one repo-wide implementation owner by default. Use worktrees and parallel subagents only for independent, coherent units. Run repository checks directly, then use one clean-context adversarial reviewer from a different model provider when possible. After fixes, push the candidate and run CI plus independent EARS verification concurrently. The verifier proves every requirement with a lasting test or a disposable one-off check. The final phase also recommends `audit-tests` for lasting-test quality and `babysit-pr` for CI and review monitoring. Local findings return to the implementation owner. Structural failures return to the top-level orchestrator for a repo-wide fix.
 3. **babysit-pr** — Monitor the PR (or a whole stack — Graphite and GitHub `gh stack` both supported) in a long-running loop: snapshot status with a deterministic script, fix CI bottom-up, answer review comments (🤖-prefixed), push once per iteration, with stale-CI and give-up guards so the loop can't spin.
 

@@ -87,7 +87,7 @@ known command or summarize its exit code.
 
 ## 6. Review and verify independently
 
-Never use Ref to host adversarial reviews unless the user explicitly asks.
+Deliver the adversarial review in the session that requested it.
 
 Start one reviewer with clean context. Give it only the requirements, repository
 path, exact base and candidate commits, and any named risk lens. The reviewer

@@ -5,7 +5,13 @@ description: Use when starting any feature, system change, or bugfix that requir
 
 # Writing Design Docs
 
-Produce a structured design document that captures what you're building, why, and how you'll verify it works. Output: `docs/plans/YYYY-MM-DD-<topic>-design.md`. This skill produces the artifact and stops.
+Produce a structured design document that captures what you're building, why,
+and how you'll verify it works.
+
+Write the plan in an external service outside the repository. Use the service
+the user or project specifies. Otherwise, prefer OpenArtifacts when available.
+If the destination is unclear, ask the user which service to use. Share the
+plan link in the session and stop.
 
 ## Process
 
@@ -20,7 +26,7 @@ digraph design_doc {
     "User approves?" [shape=diamond];
     "Adversarial spec review" [shape=box];
     "Triage findings" [shape=box];
-    "Write to docs/plans/" [shape=box];
+    "Save plan in external service" [shape=box];
     "Done" [shape=doublecircle];
 
     "Explore codebase & context" -> "Propose 2-3 approaches";
@@ -32,11 +38,11 @@ digraph design_doc {
     "Present to user for review" -> "User approves?";
     "User approves?" -> "Draft each section" [label="revise"];
     "User approves?" -> "Adversarial spec review" [label="yes, not yet reviewed"];
-    "User approves?" -> "Write to docs/plans/" [label="yes, already reviewed or small spec"];
+    "User approves?" -> "Save plan in external service" [label="yes, already reviewed or small spec"];
     "Adversarial spec review" -> "Triage findings";
     "Triage findings" -> "Draft each section" [label="accepted findings"];
-    "Triage findings" -> "Write to docs/plans/" [label="clean"];
-    "Write to docs/plans/" -> "Done";
+    "Triage findings" -> "Save plan in external service" [label="clean"];
+    "Save plan in external service" -> "Done";
 }
 ```
 
@@ -163,6 +169,9 @@ Each marker records both the question AND the assumption the spec proceeds with.
 - Each marker must include the assumed answer.
 
 ## Adversarial Spec Review
+
+Deliver the review in the session that requested it. Answer document questions
+in that session and update the plan with agreed revisions.
 
 Once the user approves the draft, run one adversarial review before writing the final artifact — a different model family with a clean context, attacking the spec the way implementation will. Bugs found here cost sentences; the same bugs found during execution cost re-plans.
 
